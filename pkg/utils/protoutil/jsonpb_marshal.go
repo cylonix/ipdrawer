@@ -23,7 +23,7 @@ import (
 
 	"github.com/gogo/protobuf/jsonpb"
 	"github.com/gogo/protobuf/proto"
-	gwruntime "github.com/grpc-ecosystem/grpc-gateway/runtime"
+	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/pkg/errors"
 )
 
@@ -35,7 +35,7 @@ var typeProtoMessage = reflect.TypeOf((*proto.Message)(nil)).Elem()
 type JSONPb jsonpb.Marshaler
 
 // ContentType implements gwruntime.Marshaler.
-func (*JSONPb) ContentType() string {
+func (*JSONPb) ContentType(v interface{}) string {
 	return "application/json"
 }
 

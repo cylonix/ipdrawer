@@ -1,28 +1,34 @@
 package server
 
 import (
-	"fmt"
 	"net"
 	"testing"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/stretchr/testify/assert"
+
+	"github.com/hatena/ipdrawer/gen/go/model"
+	server "github.com/hatena/ipdrawer/gen/go/serverpb"
 	"github.com/hatena/ipdrawer/pkg/ipam"
-	"github.com/hatena/ipdrawer/pkg/model"
-	"github.com/hatena/ipdrawer/pkg/server/serverpb"
 	"github.com/hatena/ipdrawer/pkg/storage"
 	"github.com/hatena/ipdrawer/pkg/utils/netutil"
 )
 
 var (
+	testNS     = "test.namespace"
 	testPrefix = &net.IPNet{
 		IP:   net.ParseIP("192.168.0.0"),
 		Mask: net.CIDRMask(24, 32),
 	}
 
 	testNetwork = &model.Network{
+		Namespace: testNS,
 		Prefix:    testPrefix.String(),
 		Broadcast: netutil.BroadcastIP(testPrefix).String(),
 		Netmask:   netutil.IPMaskToIP(net.CIDRMask(24, 32)).String(),
@@ -39,9 +45,10 @@ var (
 	}
 
 	testPool = &model.Pool{
-		Start:  "192.168.0.2",
-		End:    "192.168.0.254",
-		Status: model.Pool_AVAILABLE,
+		Namespace: testNS,
+		Start:     "192.168.0.2",
+		End:       "192.168.0.254",
+		Status:    model.Pool_AVAILABLE,
 		Tags: []*model.Tag{
 			{
 				Key:   "Role",
@@ -64,6 +71,8 @@ type test struct {
 
 	srvAddr string
 	base    string
+	host    string
+	scheme  string
 
 	cc *grpc.ClientConn
 }
@@ -103,39 +112,60 @@ func TestDrawIPSequentialOrder(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
 	testCases := []struct {
-		expected string
+		ip         string
+		expected   string
+		mustHaveIP bool
+		err        error
 	}{
 		{
+			ip:       testPrefix.IP.String(),
 			expected: "192.168.0.2",
 		},
 		{
+			ip:       testPrefix.IP.String(),
 			expected: "192.168.0.3",
 		},
 		{
+			ip:       testPrefix.IP.String(),
 			expected: "192.168.0.4",
+		},
+		{
+			ip:         "192.168.0.5",
+			expected:   "192.168.0.5",
+			mustHaveIP: true,
+		},
+		{
+			ip:         testPrefix.IP.String(),
+			expected:   "192.168.0.5",
+			mustHaveIP: true,
+			err:        status.Error(codes.InvalidArgument, ""),
 		},
 	}
 
-	for i, tc := range testCases {
-		resp, err := te.api.DrawIP(te.ctx, &serverpb.DrawIPRequest{
-			Ip:   testPrefix.IP.String(),
-			Mask: int32(24),
+	for _, tc := range testCases {
+		resp, err := te.api.DrawIP(te.ctx, &server.DrawIPRequest{
+			Namespace: testNS,
+			Ip:        tc.ip,
+			Mask:      int32(24),
 			PoolTag: &model.Tag{
 				Key:   "Role",
 				Value: "test",
 			},
+			MustHaveWantIp: tc.mustHaveIP,
+			Sequential:     true,
 		})
-
-		if err != nil {
-			t.Errorf("#%d: got error: %#+v", i, err)
-		}
-
-		if resp.Ip != tc.expected {
-			t.Errorf("#%d: expected %s, but got %s", i, tc.expected, resp.Ip)
+		if tc.err == nil {
+			if assert.NoError(t, err) {
+				assert.Equal(t, tc.expected, resp.Ip)
+			}
+		} else {
+			if assert.Error(t, err) {
+				assert.Equal(t, status.Code(tc.err), status.Code(err))
+			}
 		}
 	}
 }
@@ -144,8 +174,8 @@ func TestDrawIPEstimatingNetwork(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
 	pe := &peer.Peer{
 		Addr: &net.TCPAddr{
@@ -155,11 +185,13 @@ func TestDrawIPEstimatingNetwork(t *testing.T) {
 	}
 	resp, err := te.api.DrawIPEstimatingNetwork(
 		peer.NewContext(te.ctx, pe),
-		&serverpb.DrawIPEstimatingNetworkRequest{
+		&server.DrawIPEstimatingNetworkRequest{
+			Namespace: testNS,
 			PoolTag: &model.Tag{
 				Key:   "Role",
 				Value: "test",
 			},
+			Sequential: true,
 		},
 	)
 	if err != nil {
@@ -174,11 +206,12 @@ func TestActivateIP(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
-	_, err := te.api.ActivateIP(te.ctx, &serverpb.ActivateIPRequest{
-		Ip: "192.168.0.122",
+	_, err := te.api.ActivateIP(te.ctx, &server.ActivateIPRequest{
+		Namespace: testNS,
+		Ip:        "192.168.0.122",
 		Tags: []*model.Tag{
 			{
 				Key:   "Role",
@@ -198,11 +231,12 @@ func TestActivateIPWhenAlreadyActivated(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
-	req := &serverpb.ActivateIPRequest{
-		Ip: "192.168.0.122",
+	req := &server.ActivateIPRequest{
+		Namespace: testNS,
+		Ip:        "192.168.0.122",
 		Tags: []*model.Tag{
 			{
 				Key:   "Role",
@@ -225,12 +259,13 @@ func TestDrawIPAndActivateImmediately(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
-	resp, err := te.api.DrawIP(te.ctx, &serverpb.DrawIPRequest{
-		Ip:   testPrefix.IP.String(),
-		Mask: int32(24),
+	resp, err := te.api.DrawIP(te.ctx, &server.DrawIPRequest{
+		Namespace: testNS,
+		Ip:        testPrefix.IP.String(),
+		Mask:      int32(24),
 		PoolTag: &model.Tag{
 			Key:   "Role",
 			Value: "test",
@@ -251,9 +286,9 @@ func TestListNetworks(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
 
-	resp, err := te.api.ListNetwork(te.ctx, &serverpb.ListNetworkRequest{})
+	resp, err := te.api.ListNetwork(te.ctx, &server.ListNetworkRequest{Namespace: testNS})
 
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
@@ -263,7 +298,7 @@ func TestListNetworks(t *testing.T) {
 		t.Errorf("Got wrong number of networks %d; want 1", len(resp.Networks))
 	}
 
-	if !resp.Networks[0].Equal(testNetwork) {
+	if !proto.Equal(resp.Networks[0], testNetwork) {
 		t.Errorf("Got wrong network %v; want %v", resp.Networks[0], testNetwork)
 	}
 }
@@ -272,26 +307,29 @@ func TestGetIPInPool(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	err := te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	err := te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
 
 	ips := []*model.IPAddr{
 		{
-			Ip:     "192.168.0.5",
-			Status: model.IPAddr_ACTIVE,
+			Namespace: testNS,
+			Ip:        "192.168.0.5",
+			Status:    model.IPAddr_ACTIVE,
 		},
 		{
-			Ip:     "10.0.0.5",
-			Status: model.IPAddr_ACTIVE,
+			Namespace: testNS,
+			Ip:        "10.0.0.5",
+			Status:    model.IPAddr_ACTIVE,
 		},
 	}
 	for _, ip := range ips {
 		te.manager.CreateIP(te.ctx, []*model.Pool{testPool}, ip)
 	}
 
-	resp, err := te.api.GetIPInPool(te.ctx, &serverpb.GetIPInPoolRequest{
+	resp, err := te.api.GetIPInPool(te.ctx, &server.GetIPInPoolRequest{
+		Namespace:  testNS,
 		RangeStart: testPool.Start,
 		RangeEnd:   testPool.End,
 	})
@@ -303,7 +341,7 @@ func TestGetIPInPool(t *testing.T) {
 	if len(resp.Ips) != 1 {
 		t.Errorf("Got wrong number of ips %d; want 1", len(resp.Ips))
 	}
-	if !resp.Ips[0].Equal(ips[0]) {
+	if !proto.Equal(resp.Ips[0], ips[0]) {
 		t.Errorf("Got wrong ips %v; want %v", resp.Ips[0], ips[0])
 	}
 }
@@ -312,82 +350,76 @@ func TestGetNetwork(t *testing.T) {
 	te := newTest(t)
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
 	testCases := []struct {
-		req      *serverpb.GetNetworkRequest
+		req      *server.GetNetworkRequest
 		expected string
-		errmsg   string
+		err      error
 		desc     string
 	}{
 		{
-			req: &serverpb.GetNetworkRequest{
-				Ip:   "192.168.0.0",
-				Mask: 24,
+			req: &server.GetNetworkRequest{
+				Namespace: testNS,
+				Ip:        "192.168.0.0",
+				Mask:      24,
 			},
 			expected: "192.168.0.0/24",
-			errmsg:   "",
 			desc:     "GetNetworkByIP",
 		},
 		{
-			req: &serverpb.GetNetworkRequest{
-				Name: "test",
+			req: &server.GetNetworkRequest{
+				Namespace: testNS,
+				Name:      "test",
 			},
 			expected: "192.168.0.0/24",
-			errmsg:   "",
 			desc:     "GetNetworkByName",
 		},
 		{
-			req: &serverpb.GetNetworkRequest{
-				Ip:   "192.168.0.255",
-				Mask: 24,
+			req: &server.GetNetworkRequest{
+				Namespace: testNS,
+				Ip:        "192.168.0.255",
+				Mask:      24,
 			},
-			errmsg: "not found Network",
-			desc:   "not exist ip",
+			err:  ipam.ErrNetworkNotFound,
+			desc: "not exist ip",
 		},
 		{
-			req: &serverpb.GetNetworkRequest{
-				Name: "notfound",
+			req: &server.GetNetworkRequest{
+				Namespace: testNS,
+				Name:      "notfound",
 			},
-			errmsg: "Not found network",
-			desc:   "not exist name",
+			err:  ipam.ErrNetworkNotFound,
+			desc: "not exist name",
 		},
 	}
 
 	for _, tc := range testCases {
 		resp, err := te.api.GetNetwork(te.ctx, tc.req)
-
-		if err == nil && tc.errmsg != "" {
-			t.Fatalf("desc: %s, Got nil; want error %q", tc.desc, tc.errmsg)
-		} else if err != nil && fmt.Sprintf("%s", err) != tc.errmsg {
-			t.Fatalf("desc: %s, Got error %q; want error %q", tc.desc, err, tc.errmsg)
-		}
-
-		if err != nil {
-			continue
-		}
-
-		if resp.Network != tc.expected {
-			t.Errorf("desc: %s, Got wrong ip %v; want %v", tc.desc, resp.Network, tc.expected)
+		if tc.err == nil {
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, resp.Network)
+		} else {
+			assert.ErrorIs(t, err, tc.err)
 		}
 	}
 }
 
 func TestCreateNetwork(t *testing.T) {
 	testCases := []struct {
-		req *serverpb.CreateNetworkRequest
+		req *server.CreateNetworkRequest
 		exp string
 	}{
 		{
-			req: &serverpb.CreateNetworkRequest{
+			req: &server.CreateNetworkRequest{
 				Ip:   "192.168.0.0",
 				Mask: 24,
 			},
 			exp: "192.168.0.0/24",
 		},
 		{
-			req: &serverpb.CreateNetworkRequest{
+			req: &server.CreateNetworkRequest{
 				Ip:   "192.168.0.0",
 				Mask: 0,
 			},
@@ -404,7 +436,7 @@ func TestCreateNetwork(t *testing.T) {
 			t.Errorf("#%d: got error %q; want success", i, err)
 		}
 
-		resp, err := te.api.ListNetwork(te.ctx, &serverpb.ListNetworkRequest{})
+		resp, err := te.api.ListNetwork(te.ctx, &server.ListNetworkRequest{})
 		if err != nil {
 			t.Errorf("#%d: got error %q; want success", i, err)
 		}

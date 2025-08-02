@@ -4,21 +4,22 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hatena/ipdrawer/pkg/utils/netutil"
+	"github.com/hatena/ipdrawer/gen/go/model"
+	nu "github.com/hatena/ipdrawer/pkg/utils/netutil"
 )
 
-func (p *Pool) Key() string {
+func PoolKey(p *model.Pool) string {
 	return fmt.Sprintf("%s,%s", p.Start, p.End)
 }
 
-func (p *Pool) Contains(ip net.IP) bool {
-	s := netutil.IP2Uint(net.ParseIP(p.Start))
-	e := netutil.IP2Uint(net.ParseIP(p.End))
-	i := netutil.IP2Uint(ip)
+func PoolContains(p *model.Pool, ip net.IP) bool {
+	s := nu.IP2Uint(net.ParseIP(p.Start))
+	e := nu.IP2Uint(net.ParseIP(p.End))
+	i := nu.IP2Uint(ip)
 	return s <= i && i <= e
 }
 
-func (p *Pool) MatchTags(tags []*Tag) bool {
+func PoolMatchTags(p *model.Pool, tags []*model.Tag) bool {
 	var flag bool
 	for _, target := range tags {
 		flag = false

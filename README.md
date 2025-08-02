@@ -1,16 +1,19 @@
-# :warning: As of March 2023, In our environment, ipdrawer is no longer in production, so we made this repository public arvhice. :warning:
-
 # IPDrawer
 
-
 ## What is IPDrawer?
+
 IPDrawer is IP Address Management (IPAM) application and the code is written in Golang.
 
 ## Features
-* IPDrawer can assigne IP from the predefined IP pools.
-* IPDrawer has gRPC and REST API interfaces.
+
+* Assign IP from the predefined IP pools.
+* Support gRPC and REST API interfaces.
+* Support assigning the same IP for the same UUID.
+* Support multi-tenancy with namespace.
+* Support assigning the specified IP address if available.
 
 ## API Docs
+
 * [REST API Reference](/pkg/server/apiclient/README.md)
 * `./ipdrawer start --redis-host localhost` and access to `http://localhost:25577/swagger-ui`
 
@@ -24,28 +27,31 @@ IPDrawer is IP Address Management (IPAM) application and the code is written in 
 ### Generate a binary
 
 ```bash
-$ make
-$ ./ipdrawer --help
+make
+./ipdrawer --help
 ```
 
 ### Generate proto files
 
+Require [buf](https://buf.build/) and docker installed.
+
 ```bash
-$ make proto
+make proto
 ```
 
 ### Run test
 
 ```bash
-$ make test
+make test
 ```
 
 ### (Option) CI/CD Pipeline
-- buildspec.yml
-  - build docker image and push to ECR
-- create-pr.sh
-  - Create PR in another repository for deploy (GitOps)
+
+* buildspec.yml
+  * build docker image and push to ECR
+* create-pr.sh
+  * Create PR in another repository for deploy (GitOps)
 
 ## Author
 
-[taku-k](https://github.com/taku-k)
+Forked from [https://github.com/hatena/ipdrawer](https://github.com/hatena/ipdrawer)

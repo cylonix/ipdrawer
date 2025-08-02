@@ -2,13 +2,12 @@ package server
 
 import (
 	ocontext "context"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"mime"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
@@ -16,7 +15,7 @@ import (
 	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
 	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	negronilogrus "github.com/meatballhat/negroni-logrus"
 	"github.com/opentracing/opentracing-go"
 	"github.com/rakyll/statik/fs"
@@ -25,17 +24,20 @@ import (
 	"github.com/urfave/negroni"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protojson"
 
+	"github.com/hatena/ipdrawer/gen/go/serverpb"
 	"github.com/hatena/ipdrawer/pkg/base"
 	"github.com/hatena/ipdrawer/pkg/ipam"
-	"github.com/hatena/ipdrawer/pkg/server/serverpb"
 	_ "github.com/hatena/ipdrawer/pkg/ui/swagger" // import static files
-	"github.com/hatena/ipdrawer/pkg/utils/protoutil"
 )
 
 var logrusEntry = logrus.NewEntry(logrus.New())
 
 type APIServer struct {
+	serverpb.UnimplementedNetworkServiceV0Server
+	serverpb.UnimplementedIPServiceV0Server
+	serverpb.UnimplementedPoolServiceV0Server
 	lis     net.Listener
 	manager *ipam.IPManager
 	grpcS   *grpc.Server
@@ -56,17 +58,17 @@ func NewServer(cfg *base.Config) *APIServer {
 }
 
 func (api *APIServer) newGateway(ctx context.Context) (http.Handler, error) {
-	jsonpb := &protoutil.JSONPb{
-		EnumsAsInts:  true,
-		EmitDefaults: true,
-		Indent:       "  ",
-	}
-	protopb := new(protoutil.ProtoPb)
 	mux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, jsonpb),
-		runtime.WithMarshalerOption("application/json", jsonpb),
-		runtime.WithMarshalerOption("application/x-protobuf", protopb),
-		runtime.WithProtoErrorHandler(runtime.DefaultHTTPProtoErrorHandler),
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
+			MarshalOptions: protojson.MarshalOptions{
+				UseEnumNumbers:  true,
+				EmitUnpopulated: true,
+				Indent:          "  ",
+			},
+			UnmarshalOptions: protojson.UnmarshalOptions{
+				DiscardUnknown: true,
+			},
+		}),
 	)
 	addr := api.lis.Addr().String()
 	opts := []grpc.DialOption{grpc.WithInsecure()}
@@ -104,17 +106,18 @@ func serveSwagger(mux *http.ServeMux) {
 	mux.Handle(prefix, http.StripPrefix(prefix, http.FileServer(statikFS)))
 
 	mux.HandleFunc("/swagger.json", func(w http.ResponseWriter, req *http.Request) {
-		io.Copy(w, strings.NewReader(serverpb.Swagger))
+		io.Copy(w, strings.NewReader(serverpb.SWAGGER))
 	})
 }
 
 func (api *APIServer) Start() error {
+	log := logger.WithField("handle", "Server")
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	cm := cmux.New(api.lis)
-	grpcL := cm.Match(cmux.HTTP2HeaderField("content-type", "application/grpc"))
+	grpcL := cm.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
 	httpL := cm.Match(cmux.HTTP1Fast())
 
 	api.grpcS = grpc.NewServer(
@@ -155,12 +158,18 @@ func (api *APIServer) Start() error {
 
 	go func() {
 		if err := api.grpcS.Serve(grpcL); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.WithError(err).Errorln("grpc server exited")
+			if !errors.Is(err, cmux.ErrServerClosed) {
+				panic(err)
+			}
 		}
 	}()
 	go func() {
 		if err := api.httpS.Serve(httpL); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			log.WithError(err).Errorln("http server exited")
+			if !errors.Is(err, http.ErrServerClosed) {
+				panic(err)
+			}
 		}
 	}()
 
@@ -176,7 +185,7 @@ func (api *APIServer) Shutdown(
 	stopped <- struct{}{}
 }
 
-func parseIPAndMask(ip, mask string) (net.IP, error) {
+func ParseIPAndMask(ip, mask string) (net.IP, error) {
 	return nil, nil
 }
 

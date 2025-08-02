@@ -6,8 +6,11 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/hatena/ipdrawer/pkg/server/apiclient"
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	client "github.com/hatena/ipdrawer/gen/client"
+	"github.com/sirupsen/logrus"
 )
 
 func (te *test) startServer() {
@@ -17,25 +20,27 @@ func (te *test) startServer() {
 		te.t.Fatalf("Failed to listen: %v", err)
 	}
 	te.api.lis = lis
-	addr := la
 	_, port, err := net.SplitHostPort(lis.Addr().String())
 	if err != nil {
 		te.t.Fatalf("Failed to parse listener address: %v", err)
 	}
-	addr = "localhost:" + port
+	addr := "localhost:" + port
 	go te.api.Start()
 	te.srvAddr = addr
-	te.base = "http://" + addr
+	te.scheme = "http"
+	te.host = addr
+	te.base = te.scheme + "://" + addr
+	logrus.Infof("started server at %v", te.base)
 }
 
-func (te *test) clientConn() *grpc.ClientConn {
+func (te *test) ClientConn() *grpc.ClientConn {
 	if te.cc != nil {
 		return te.cc
 	}
 
 	var err error
-	te.cc, err = grpc.Dial(te.srvAddr, []grpc.DialOption{
-		grpc.WithInsecure(),
+	te.cc, err = grpc.NewClient(te.srvAddr, []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}...)
 	if err != nil {
 		te.t.Fatalf("Dial(%q) = %v", te.srvAddr, err)
@@ -49,8 +54,8 @@ func TestDrawIPEstimatingNetwork_E2E_ViaGW(t *testing.T) {
 	defer te.tearDown()
 
 	// Use testdata
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
 
 	testCases := []struct {
 		// Input
@@ -93,16 +98,33 @@ func TestDrawIPEstimatingNetwork_E2E_ViaGW(t *testing.T) {
 			desc: "Network does not exists",
 		},
 	}
+	var md runtime.ServerMetadata
+	ctx := runtime.NewServerMetadataContext(te.ctx, md)
 
 	for i, tc := range testCases {
-		cl := apiclient.NewNetworkServiceV0ApiWithBasePath(te.base)
-		cl.Configuration.AddDefaultHeader("X-Forwarded-For", tc.remote)
+		cfg := client.NewConfiguration()
+		cfg.Host = te.host
+		cfg.Scheme = te.scheme
+		cfg.AddDefaultHeader("X-Forwarded-For", tc.remote)
+		cl := client.NewAPIClient(cfg).NetworkServiceV0API
+		req := cl.NetworkServiceV0DrawIPEstimatingNetwork(ctx, testNS)
+		req = req.
+			PoolTagKey(tc.tagKey).
+			PoolTagValue(tc.tagValue).
+			TemporaryReserved(false).
+			Sequential(true)
+		resp, apiresp, err := req.Execute()
 
-		resp, apiresp, err := cl.DrawIPEstimatingNetwork(tc.tagKey, tc.tagValue, false)
+		if tc.status != http.StatusOK {
+			if apiresp != nil && apiresp.StatusCode == tc.status {
+				continue
+			}
+		}
 
 		if err != nil {
 			t.Errorf("#%d(desc=%s): cl.DrawIPEstimatingNetwork failed with %v; want success",
 				i, tc.desc, err)
+			continue
 		}
 
 		if apiresp.StatusCode != tc.status {
@@ -110,9 +132,9 @@ func TestDrawIPEstimatingNetwork_E2E_ViaGW(t *testing.T) {
 				i, tc.desc, apiresp.Status, tc.status, http.StatusText(tc.status))
 		}
 
-		if resp.Ip != tc.ip {
+		if *resp.IP != tc.ip {
 			t.Errorf("#%d(desc=%s): cl.DrawIPEstimatingNetwork returns unexpected IP(%v); want IP(%v)",
-				i, tc.desc, resp.Ip, tc.ip)
+				i, tc.desc, resp.IP, tc.ip)
 		}
 	}
 }
@@ -123,8 +145,11 @@ func TestGetEstimatedNetwork_E2E_ViaGW(t *testing.T) {
 	defer te.tearDown()
 
 	// Use testdata
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	err1 := te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	err2 := te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
+	if err1 != nil || err2 != nil {
+		t.Errorf("set up failed: %v %v", err1, err2)
+	}
 
 	testCases := []struct {
 		// Input
@@ -149,19 +174,30 @@ func TestGetEstimatedNetwork_E2E_ViaGW(t *testing.T) {
 
 			status: http.StatusNotFound,
 
-			desc: "Network including 192.168.1.1 does not exists",
+			desc: "Network including 192.168.1.1 does not exist",
 		},
 	}
 
+	ctx := runtime.NewServerMetadataContext(te.ctx, runtime.ServerMetadata{})
 	for i, tc := range testCases {
-		cl := apiclient.NewNetworkServiceV0ApiWithBasePath(te.base)
-		cl.Configuration.AddDefaultHeader("X-Forwarded-For", tc.remote)
+		cfg := client.NewConfiguration()
+		cfg.Host = te.host
+		cfg.Scheme = te.scheme
+		cfg.AddDefaultHeader("X-Forwarded-For", tc.remote)
+		cl := client.NewAPIClient(cfg).NetworkServiceV0API
+		req := cl.NetworkServiceV0GetEstimatedNetwork(ctx, testNS)
+		resp, apiresp, err := req.Execute()
 
-		resp, apiresp, err := cl.GetEstimatedNetwork()
-
+		// res error is set if apiresp status is not 200.
+		if tc.status != http.StatusOK {
+			if apiresp != nil && apiresp.StatusCode == tc.status {
+				continue
+			}
+		}
 		if err != nil {
 			t.Errorf("#%d(desc=%s): cl.GetEstimatedNetwork() failed with %v; want success",
 				i, tc.desc, err)
+			continue
 		}
 
 		if apiresp.StatusCode != tc.status {
@@ -169,7 +205,7 @@ func TestGetEstimatedNetwork_E2E_ViaGW(t *testing.T) {
 				i, tc.desc, apiresp.Status, tc.status, http.StatusText(tc.status))
 		}
 
-		if resp.Network != tc.network {
+		if *resp.Network != tc.network {
 			t.Errorf("#%d(desc=%s): cl.GetEstimatedNetwork() returns unexpected network(%v); want network(%v)",
 				i, tc.desc, resp.Network, tc.network)
 		}
@@ -181,19 +217,29 @@ func TestActivateIP_E2E_ViaGW(t *testing.T) {
 	te.startServer()
 	defer te.tearDown()
 
-	te.manager.CreateNetwork(te.ctx, testNetwork)
-	te.manager.CreatePool(te.ctx, testNetwork, testPool)
+	err1 := te.manager.CreateNetwork(te.ctx, testNS, testNetwork)
+	err2 := te.manager.CreatePool(te.ctx, testNS, testNetwork, testPool)
+	if err1 != nil || err2 != nil {
+		t.Errorf("set up failed: %v %v", err1, err2)
+	}
 
-	cl := apiclient.NewIPServiceV0ApiWithBasePath(te.base)
-
-	_, apiresp, err := cl.ActivateIP("192.168.0.111", apiclient.ServerpbActivateIpRequest{
-		Tags: []apiclient.ModelTag{
+	ctx := runtime.NewServerMetadataContext(te.ctx, runtime.ServerMetadata{})
+	cfg := client.NewConfiguration()
+	cfg.Host = te.host
+	cfg.Scheme = te.scheme
+	cl := client.NewAPIClient(cfg).IPServiceV0API
+	req := cl.IPServiceV0ActivateIP(ctx, testNS, "192.168.0.111")
+	key := "Role"
+	val := "test"
+	req = req.Body(client.IPServiceV0ActivateIPBody{
+		Tags: []client.ModelTag{
 			{
-				Key:   "Role",
-				Value: "test",
+				Key:   &key,
+				Value: &val,
 			},
 		},
 	})
+	_, apiresp, err := req.Execute()
 
 	if err != nil {
 		t.Fatalf("cl.ActivateIP failed with %v; want success", err)

@@ -1,32 +1,26 @@
-NAME     := ipdrawer
-VERSION  := $(shell git describe --tags --exact-match 2> /dev/null || git rev-parse --short HEAD || echo "unknown")
-REVISION := $(shell git rev-parse HEAD)
-PROTO := protoc
-PKG := github.com/hatena/ipdrawer
-SWAGGER_CODEGEN := swagger-codegen
-
-SRCS    := $(shell find . -type f -name '*.go')
-PROTOSRCS := $(shell find . -type f -name '*.proto' | grep -v -e vendor | grep -v -e node_modules)
-LINUX_LDFLAGS := -s -w -extldflags "-static"
+NAME           := ipdrawer
+RELEASE_TAG    ?= v2.0
+VERSION        := $(shell git describe --tags --exact-match 2> /dev/null || git rev-parse --short HEAD || echo "unknown")
+REVISION       := $(shell git rev-parse HEAD)
+SRCS           := $(shell find . -type f -name '*.go')
+PROTOSRCS      := $(shell find . -type f -name '*.proto' | grep -v -e vendor | grep -v -e node_modules)
+LINUX_LDFLAGS  := -s -w -extldflags "-static"
 DARWIN_LDFLAGS := -s -w
-LINKFLAGS := \
+LINKFLAGS      := \
 	-X "github.com/hatena/ipdrawer/pkg/build.tag=$(VERSION)" \
 	-X "github.com/hatena/ipdrawer/pkg/build.rev=$(REVISION)"
 override LINUX_LDFLAGS += $(LINKFLAGS)
 override DARWIN_LDFLAGS += $(LINKFLAGS)
 
-API_CLIENT_DIR := pkg/server/apiclient
-API_SPEC := pkg/server/serverpb/server.swagger.json
-
+PKG                  := github.com/hatena/ipdrawer
+API_CLIENT_DIR       := gen/client
+API_SPEC             := gen/openapiv2/serverpb/server.swagger.json
 SWAGGER_UI_DATA_PATH := pkg/ui/
-SWAGGER_UI_SRC := third_party/swagger-ui
-
-export GO111MODULE=on
-
-.DEFAULT_GOAL := $(NAME)
+SWAGGER_UI_SRC       := third_party/swagger-ui
+DOCKER_PROXY_ARGS    := --build-arg GO_PROXY="https://proxy.golang.org,direct"
 
 $(NAME): $(SRCS)
-	go build -ldflags '$(DARWIN_LDFLAGS)' $(PKG)/cmd/...
+	go build -ldflags '$(DARWIN_LDFLAGS)' $(PKG)/cmd/ipdrawer
 
 .PHONY: cross-build
 cross-build:
@@ -43,7 +37,7 @@ vet:
 
 .PHONY: test
 test:
-	go test -cover -v $$(go list ./... | grep -v -e node_modules)
+	go test -cover $$(go list ./... | grep -v -e node_modules)
 
 .PHONY: test-race
 test-race:
@@ -60,44 +54,52 @@ fmt:
 imports:
 	goimports -w $$(find . -type f -name '*.go' | grep -v -e vendor -e node_modules)
 
+# Proto is generated and saved in gen/go.
+# Re-make this target if proto file changes.
 .PHONY: proto
-proto: $(PROTOSRCS)
-	for src in $(PROTOSRCS); do \
-	  $(PROTO) \
-	   -Ipkg \
-	   -I$$GOPATH/src/github.com/grpc-ecosystem/grpc-gateway/third_party/googleapis \
-	   -I$$GOPATH/src \
-	   -Ivendor \
-	   $$src \
-	   --grpc-gateway_out=logtostderr=true:pkg \
-	   --govalidators_out=pkg \
-	   --swagger_out=logtostderr=true:pkg \
-	   --gofast_out=plugins=grpc:pkg; \
-	done;
-	go generate ./pkg/server/serverpb
-	make gen-client
+proto:
+	rm -rf gen
+	buf generate proto
+	go generate ./tools
+	go install golang.org/x/tools/cmd/goimports@latest
+	make gen-client-docker
 	make fmt imports
-
-.PHONY: deps
-deps:
-	go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway
-	go get -u github.com/grpc-ecosystem/grpc-gateway/protoc-gen-swagger
-	go get -u github.com/golang/protobuf/protoc-gen-go
-	go get -u github.com/mwitkow/go-proto-validators/protoc-gen-govalidators
-	go get -u github.com/gogo/protobuf/protoc-gen-gofast
-	go get -u github.com/rakyll/statik
+	go mod tidy
 
 .PHONY: ui
 ui:
 	statik -dest $(SWAGGER_UI_DATA_PATH) -p swagger -src $(SWAGGER_UI_SRC)
 	make fmt imports
 
-.PHONY: gen-client
-gen-client: $(API_SPEC)
-	$(SWAGGER_CODEGEN) generate -i $(API_SPEC) \
-	  -l go -o pkg/server/apiclient --additional-properties packageName=apiclient
-	@rm -rf $(API_CLIENT_DIR)/git_push.sh \
-	       $(API_CLIENT_DIR)/.travis.yml
+.PHONY: gen-client-docker
+gen-client-docker: $(API_SPEC)
+	docker run --rm -v ${PWD}:/local cylonix/openapi-generator-cli:v7.8.5 \
+		generate -g go \
+		-i /local/$(API_SPEC) \
+		-o /local/$(API_CLIENT_DIR) \
+		--git-repo-id ipdrawer/$(API_CLIENT_DIR) --git-user-id hatena \
+		--additional-properties packageName=apiclient,enumClassPrefix=true,packageVersion=1.0 \
+		--inline-schema-options RESOLVE_INLINE_ENUMS=true
+	sudo chown -R ${USER}:${USER} ./$(API_CLIENT_DIR)
+	@rm -rf \
+		$(API_CLIENT_DIR)/go.mod \
+		$(API_CLIENT_DIR)/go.sum
+
+.PHONY: docker
+BRANCH = $(shell git rev-parse --abbrev-ref HEAD)
+docker:
+	docker build ${DOCKER_PROXY_ARGS} \
+		--network host \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg VCS_URL="https://gitlab.com/cylonix/sase/ipdrawer" \
+		--build-arg VCS_REF=$(REVISION) \
+		--build-arg VCS_BRANCH=$(BRANCH) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--tag cylonix/ipdrawer:$(REVISION) \
+		--tag cylonix/ipdrawer:$(VERSION) \
+		--tag cylonix/ipdrawer:$(RELEASE_TAG) \
+		--tag cylonix/ipdrawer:latest \
+		.
 
 .PHONY: clean
 clean:

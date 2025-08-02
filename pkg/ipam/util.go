@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
 	"github.com/pkg/errors"
 )
 
-func unmarshalTag(s string) (*model.Tag, error) {
+func UnmarshalTag(s string) (*model.Tag, error) {
 	kv := strings.Split(s, "=")
 	if len(kv) != 2 {
 		return nil, errors.New(

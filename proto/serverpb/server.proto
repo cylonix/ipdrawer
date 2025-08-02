@@ -1,0 +1,309 @@
+syntax = "proto3";
+package serverpb;
+
+import "google/api/annotations.proto";
+import "buf/validate/validate.proto";
+import "model/model.proto";
+import "model/rules.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/hatena/ipdrawer/gen/go/serverpb";
+
+message ListNetworkRequest { string namespace = 1; }
+
+message ListNetworkResponse { repeated model.Network networks = 1; }
+
+message DrawIPRequest {
+  // The ip address wanted or the network to draw ip from. Optional.
+  string          ip                 = 1 [ (buf.validate.field).string.(model.ipv4_or_null) = true ];
+  int32           mask               = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  model.Tag       pool_tag           = 3;
+  string          name               = 4;
+  bool            temporary_reserved = 5;
+  string          range_start        = 6 [ (buf.validate.field).string.(model.ipv4_or_null) = true ];
+  string          range_end          = 7 [ (buf.validate.field).string.(model.ipv4_or_null) = true ];
+  string          uuid               = 8;
+  string          namespace          = 9;
+  bool            must_have_want_ip  = 10;
+  bool            sequential         = 11; // Default false i.e. randomized
+}
+
+message DrawIPResponse {
+  string ip      = 1;
+  string message = 2;
+}
+
+message DrawIPEstimatingNetworkRequest {
+  model.Tag pool_tag           = 1;
+  bool      temporary_reserved = 2;
+  string    namespace          = 3;
+  bool      sequential         = 4; // Default false i.e. randomized
+}
+
+message GetNetworkIncludingIPRequest {
+  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string namespace = 2;
+}
+
+message CreateIPResponse {}
+
+message ActivateIPRequest {
+  string             ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  repeated model.Tag tags      = 2;
+  string             uuid      = 3;
+  string             namespace = 4;
+}
+
+message DeactivateIPRequest {
+  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string namespace = 2;
+}
+
+message DeactivateIPResponse {}
+
+message UpdateIPResponse {}
+
+message GetNetworkRequest {
+  string ip        = 1 [ (buf.validate.field).string.(model.ipv4_or_null) = true ];
+  int32  mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  string name      = 3;
+  string namespace = 4;
+}
+
+message GetEstimatedNetworkRequest { string namespace = 1; }
+
+message GetNetworkResponse {
+  string             network          = 1 [ (buf.validate.field).string.ipv4_prefix = true ];
+  repeated string    default_gateways = 2;
+  string             broadcast        = 3;
+  string             netmask          = 4;
+  repeated model.Tag tags             = 5;
+}
+
+message CreateNetworkRequest {
+  string               ip               = 1 [ (buf.validate.field).string.ipv4 = true ];
+  int32                mask             = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  repeated string      default_gateways = 3;
+  repeated model.Tag   tags             = 4;
+  model.Network.Status status           = 5;
+  string               namespace        = 6;
+}
+
+message CreateNetworkResponse {}
+
+message GetPoolsInNetworkRequest {
+  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  int32  mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  string namespace = 3;
+}
+
+message GetPoolsInNetworkResponse { repeated model.Pool pools = 1; }
+
+message CreatePoolRequest {
+  string     ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  int32      mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  model.Pool pool      = 3;
+  string     namespace = 4;
+}
+
+message CreatePoolResponse {}
+
+message DeleteNetworkRequest {
+  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  int32  mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
+  string namespace = 3;
+}
+
+message DeleteNetworkResponse {}
+
+message UpdateNetworkResponse {}
+
+message ListIPRequest { string namespace = 1; }
+
+message ListIPResponse { repeated model.IPAddr ips = 1; }
+
+message ListTemporaryReservedIPRequest { string namespace = 1; }
+
+message ListTemporaryReservedIPResponse { repeated model.IPAddr ips = 1; }
+
+message ListPoolRequest { string namespace = 1; }
+
+message ListPoolResponse { repeated model.Pool pools = 1; }
+
+message GetIPInPoolRequest {
+  string range_start = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string range_end   = 2 [ (buf.validate.field).string.ipv4 = true ];
+  string namespace   = 3;
+}
+
+message GetIPInPoolResponse {
+  model.Pool            pool = 1;
+  repeated model.IPAddr ips  = 2;
+}
+
+message UpdatePoolResponse {}
+
+message DeletePoolRequest {
+  string range_start = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string range_end   = 2 [ (buf.validate.field).string.ipv4 = true ];
+  string namespace   = 3;
+}
+
+message DeletePoolResponse {}
+
+service NetworkServiceV0 {
+
+  rpc ListNetwork(ListNetworkRequest) returns (ListNetworkResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/networks"
+    };
+  }
+
+  rpc GetEstimatedNetwork(GetEstimatedNetworkRequest)
+      returns (GetNetworkResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/network"
+    };
+  };
+
+  rpc DrawIP(DrawIPRequest) returns (DrawIPResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/network/{ip}/{mask}/drawip"
+      body: "*"
+      additional_bindings {
+        post: "/api/v0/{namespace}/network/{name}/drawip"
+        body: "*"
+      }
+      additional_bindings {
+        post: "/api/v0/{namespace}/pool/{range_start}/{range_end}/drawip"
+        body: "*"
+      }
+    };
+  };
+
+  rpc DrawIPEstimatingNetwork(DrawIPEstimatingNetworkRequest)
+      returns (DrawIPResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/drawip"
+    };
+  };
+
+  rpc GetNetwork(GetNetworkRequest) returns (GetNetworkResponse) {
+    option (google.api.http) = {
+      get : "/api/v0/{namespace}/network/{ip}/{mask}"
+      additional_bindings {get: "/api/v0/{namespace}/network/{name}"}
+    };
+  };
+
+  rpc CreateNetwork(CreateNetworkRequest) returns (CreateNetworkResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/network/{ip}/{mask}/create"
+      body: "*"
+    };
+  };
+
+  rpc CreatePool(CreatePoolRequest) returns (CreatePoolResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/network/{ip}/{mask}/pool/create"
+      body: "*"
+    };
+  };
+
+  rpc GetPoolsInNetwork(GetPoolsInNetworkRequest)
+      returns (GetPoolsInNetworkResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/network/{ip}/{mask}/pools"
+    };
+  };
+
+  rpc DeleteNetwork(DeleteNetworkRequest) returns (DeleteNetworkResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/network/{ip}/{mask}/delete"
+    };
+  };
+
+  rpc UpdateNetwork(model.Network) returns (UpdateNetworkResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/network/update"
+      body: "*"
+    };
+  };
+}
+
+service IPServiceV0 {
+
+  rpc GetNetworkIncludingIP(GetNetworkIncludingIPRequest)
+      returns (GetNetworkResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/ip/{ip}/network"
+    };
+  };
+
+  rpc CreateIP(model.IPAddr) returns (CreateIPResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/ip/{ip}/create"
+      body: "*"
+    };
+  };
+
+  rpc ActivateIP(ActivateIPRequest) returns (CreateIPResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/ip/{ip}/activate"
+      body: "*"
+    };
+  };
+
+  rpc DeactivateIP(DeactivateIPRequest) returns (DeactivateIPResponse) {
+    option (google.api.http) = {
+      post : "/api/v0/{namespace}/ip/{ip}/deactivate"
+    };
+  };
+
+  rpc UpdateIP(model.IPAddr) returns (UpdateIPResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/ip/{ip}/update"
+      body: "*"
+    };
+  };
+
+  rpc ListIP(ListIPRequest) returns (ListIPResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/ip/list"
+    };
+  };
+
+  rpc ListTemporaryReservedIP(ListTemporaryReservedIPRequest)
+      returns (ListTemporaryReservedIPResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/ip/temporary_reserved/list"
+    };
+  };
+}
+
+service PoolServiceV0 {
+
+  rpc ListPool(ListPoolRequest) returns (ListPoolResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/pool/list"
+    };
+  };
+
+  rpc GetIPInPool(GetIPInPoolRequest) returns (GetIPInPoolResponse) {
+    option (google.api.http) = {
+      get: "/api/v0/{namespace}/pool/{range_start}/{range_end}/ip"
+    };
+  };
+
+  rpc UpdatePool(model.Pool) returns (UpdatePoolResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/pool/{start}/{end}/update"
+      body: "*"
+    };
+  };
+
+  rpc DeletePool(DeletePoolRequest) returns (DeletePoolResponse) {
+    option (google.api.http) = {
+      post: "/api/v0/{namespace}/pool/{range_start}/{range_end}/delete"
+    };
+  };
+}

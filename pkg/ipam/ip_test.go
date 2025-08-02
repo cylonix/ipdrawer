@@ -2,15 +2,19 @@ package ipam
 
 import (
 	"net"
-	"reflect"
+	"slices"
 	"testing"
 
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
+	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
-	testIP = net.ParseIP("192.168.0.1")
+	testNS   = "test-namespace"
+	testUUID = "test.uuid"
+	testIP   = net.ParseIP("192.168.0.1")
 
 	testIPAddr = &model.IPAddr{
 		Ip:     testIP.String(),
@@ -24,16 +28,20 @@ var (
 	}
 )
 
+func init() {
+	logrus.SetLevel(logrus.DebugLevel)
+}
+
 func TestSetIPAddr(t *testing.T) {
 	r, deferFunc := storage.NewTestRedis()
 	defer deferFunc()
 
-	err := setIPAddr(r, testIPAddr)
+	err := setIPAddr(r, testNS, testIPAddr)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
 
-	dkey := makeIPDetailsKey(testIP)
+	dkey := makeIPDetailsKey(testNS, testIP)
 	check, _ := r.Client.Exists(dkey).Result()
 	if check == 0 {
 		t.Errorf("IPAddr stored key doesn't exists: %s", dkey)
@@ -44,16 +52,16 @@ func TestGetIPAddr(t *testing.T) {
 	r, deferFunc := storage.NewTestRedis()
 	defer deferFunc()
 
-	err := setIPAddr(r, testIPAddr)
+	err := setIPAddr(r, testNS, testIPAddr)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
 
-	resp, err := getIPAddr(r, testIP)
+	resp, err := getIPAddr(r, testNS, testIP)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
-	if !resp.Equal(testIPAddr) {
+	if !proto.Equal(resp, testIPAddr) {
 		t.Errorf("Got wrong IPAddr %v; want %v", resp, testIPAddr)
 	}
 }
@@ -74,20 +82,22 @@ func TestGetIPAddrs(t *testing.T) {
 	}
 
 	for _, ip := range addrs {
-		err := setIPAddr(r, ip)
+		err := setIPAddr(r, testNS, ip)
 		if err != nil {
 			t.Fatalf("Got error %v; want success", err)
 		}
 	}
 
-	resp, err := getIPAddrs(r, []net.IP{
+	resp, err := getIPAddrs(r, testNS, []net.IP{
 		net.ParseIP("10.0.0.1"),
 		net.ParseIP("10.0.0.2"),
 	})
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
-	if !reflect.DeepEqual(addrs, resp) {
+	if !slices.EqualFunc(addrs, resp, func(a, b *model.IPAddr) bool {
+		return proto.Equal(a, b)
+	}) {
 		t.Errorf("Got wrong IPAddrs %v; want %v", resp, addrs)
 	}
 }
@@ -110,7 +120,7 @@ func TestSetIPAddrWithInvalidModel(t *testing.T) {
 	}
 
 	for i, tc := range testCases {
-		err := setIPAddr(r, tc.model)
+		err := setIPAddr(r, testNS, tc.model)
 		if err == nil {
 			t.Errorf("#%d(%s): Want error but get nil", i, tc.desc)
 		}

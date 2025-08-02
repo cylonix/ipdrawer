@@ -1,0 +1,10 @@
+{
+    "protoc": {
+       "options": [
+            "--proto_path=proto",
+        ]
+    },
+    "cSpell.words": [
+        "timestamppb"
+    ]
+}

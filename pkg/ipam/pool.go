@@ -5,34 +5,36 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
-
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/bufbuild/protovalidate-go"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
+	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func setTSToPool(r *storage.Redis, pool *model.Pool) error {
-	if err := pool.Validate(); err != nil {
+func setTSToPool(r *storage.Redis, namespace string, pool *model.Pool) error {
+	if err := protovalidate.Validate(pool); err != nil {
 		return err
 	}
 
-	if existsPool(r, pool) {
-		stored, _ := getPool(r, net.ParseIP(pool.Start), net.ParseIP(pool.End))
+	if existsPool(r, namespace, pool) {
+		stored, _ := getPool(r, namespace, net.ParseIP(pool.Start), net.ParseIP(pool.End))
 		pool.CreatedAt = stored.CreatedAt
 	}
 
-	now := time.Now()
+	now := timestamppb.New(time.Now())
 	if pool.CreatedAt == nil {
-		pool.CreatedAt = &now
+		pool.CreatedAt = now
 	} else {
-		pool.LastModifiedAt = &now
+		pool.LastModifiedAt = now
 	}
 
 	return nil
 }
 
-func setPool(r *storage.Redis, pool *model.Pool) error {
-	if err := pool.Validate(); err != nil {
+func setPool(r *storage.Redis, namespace string, pool *model.Pool) error {
+	if err := protovalidate.Validate(pool); err != nil {
 		return err
 	}
 
@@ -40,33 +42,32 @@ func setPool(r *storage.Redis, pool *model.Pool) error {
 	s := net.ParseIP(pool.Start)
 	e := net.ParseIP(pool.End)
 
-	dkey := makePoolDetailsKey(s, e)
-	data, err := pool.Marshal()
+	k := makePoolDetailsKey(namespace, s, e)
+	data, err := proto.Marshal(pool)
 	if err != nil {
 		return err
 	}
-	pipe.Set(dkey, string(data), 0)
+	pipe.Set(k, string(data), 0)
 
 	_, err = pipe.Exec()
 
 	return err
 }
 
-func getPool(r *storage.Redis, start net.IP, end net.IP) (*model.Pool, error) {
-	// Get details
-	dkey := makePoolDetailsKey(start, end)
+func getPool(r *storage.Redis, namespace string, start, end net.IP) (*model.Pool, error) {
+	k := makePoolDetailsKey(namespace, start, end)
 
-	check, err := r.Client.Exists(dkey).Result()
+	check, err := r.Client.Exists(k).Result()
 	if err != nil || check == 0 {
 		return nil, errors.New("not found pool")
 	}
 
-	data, err := r.Client.Get(dkey).Result()
+	data, err := r.Client.Get(k).Result()
 	if err != nil {
 		return nil, err
 	}
 	pool := &model.Pool{}
-	if err := pool.Unmarshal([]byte(data)); err != nil {
+	if err := proto.Unmarshal([]byte(data), pool); err != nil {
 		return nil, err
 	}
 
@@ -88,7 +89,7 @@ func getPools(r *storage.Redis, keys []string) ([]*model.Pool, error) {
 	for i, d := range data {
 		if s, ok := d.(string); ok {
 			pools[i] = &model.Pool{}
-			if err := pools[i].Unmarshal([]byte(s)); err != nil {
+			if err := proto.Unmarshal([]byte(s), pools[i]); err != nil {
 				return nil, err
 			}
 		}
@@ -96,12 +97,12 @@ func getPools(r *storage.Redis, keys []string) ([]*model.Pool, error) {
 	return pools, nil
 }
 
-func getPoolsInNetwork(r *storage.Redis, prefix *model.Network) ([]*model.Pool, error) {
+func getPoolsInNetwork(r *storage.Redis, namespace string, prefix *model.Network) ([]*model.Pool, error) {
 	_, pre, err := net.ParseCIDR(prefix.Prefix)
 	if err != nil {
 		return nil, err
 	}
-	poolKey := makeNetworkPoolKey(pre)
+	poolKey := makeNetworkPoolKey(namespace, pre)
 	keys, err := r.Client.SMembers(poolKey).Result()
 	if err != nil {
 		return nil, err
@@ -110,7 +111,7 @@ func getPoolsInNetwork(r *storage.Redis, prefix *model.Network) ([]*model.Pool, 
 	for i, key := range keys {
 		start := net.ParseIP(key[:strings.Index(key, ",")])
 		end := net.ParseIP(key[strings.Index(key, ",")+1:])
-		pool, err := getPool(r, start, end)
+		pool, err := getPool(r, namespace, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -119,11 +120,11 @@ func getPoolsInNetwork(r *storage.Redis, prefix *model.Network) ([]*model.Pool, 
 	return pools, nil
 }
 
-func existsPool(r *storage.Redis, pool *model.Pool) bool {
+func existsPool(r *storage.Redis, namespace string, pool *model.Pool) bool {
 	s := net.ParseIP(pool.Start)
 	e := net.ParseIP(pool.End)
 
-	dkey := makePoolDetailsKey(s, e)
-	check, _ := r.Client.Exists(dkey).Result()
+	k := makePoolDetailsKey(namespace, s, e)
+	check, _ := r.Client.Exists(k).Result()
 	return check != 0
 }

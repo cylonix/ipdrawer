@@ -12,32 +12,33 @@ const (
 	lockPrefix = "lock:"
 	globalLock = "global"
 
-	ipDetails      = "ip:%s:details"
-	ipTempReserved = "ip:%s:temporary_reserved"
-	networkList    = "network:list"
-	networkDetails = "network:%s:details"
-	poolDetails    = "pool:%s,%s:details"
-	poolUsedIPZSet = "pool:%s,%s:used_ip_zset"
+	ipDetails      = "%s:ip:%s:details"
+	ipTempReserved = "%s:ip:%s:temporary_reserved"
+	networkList    = "%s:network:list"
+	networkDetails = "%s:network:%s:details"
+	poolDetails    = "%s:pool:%s,%s:details"
+	poolUsedIPZSet = "%s:pool:%s,%s:used_ip_zset"
+	ipPoolUuid     = "%s:ip:%s,%s,%s,%s:uuid"
 )
 
 func makeGlobalLock() string {
 	return lockPrefix + globalLock
 }
 
-func makeIPDetailsKey(ip net.IP) string {
-	return fmt.Sprintf(ipDetails, ip.String())
+func makeIPDetailsKey(namespace string, ip net.IP) string {
+	return fmt.Sprintf(ipDetails, namespace, ip.String())
 }
 
-func makeIPListPattern() string {
-	return strings.Replace(ipDetails, "%s", "*", 1)
+func makeIPListPattern(namespace string) string {
+	return fmt.Sprintf(ipDetails, namespace, "*")
 }
 
 func parseIPDetailsKey(key string) (net.IP, error) {
 	d := strings.Split(key, ":")
-	if len(d) != 3 {
+	if len(d) != 4 {
 		return nil, errors.New("Not matched format")
 	}
-	ip := d[1]
+	ip := d[2]
 	addr := net.ParseIP(ip)
 	if addr == nil {
 		return nil, errors.New("Failed parse IP")
@@ -45,39 +46,76 @@ func parseIPDetailsKey(key string) (net.IP, error) {
 	return addr, nil
 }
 
-func makeIPTempReserved(ip net.IP) string {
-	return fmt.Sprintf(ipTempReserved, ip.String())
+func makeIPTempReserved(namespace string, ip net.IP) string {
+	return fmt.Sprintf(ipTempReserved, namespace, ip.String())
 }
 
-func makeTempReservedIPListPattern() string {
-	return strings.Replace(ipTempReserved, "%s", "*", 1)
+func makeTempReservedIPListPattern(namespace string) string {
+	return fmt.Sprintf(ipTempReserved, namespace, "*")
 }
 
 func parseTempReservedIPKey(key string) (net.IP, error) {
 	return parseIPDetailsKey(key)
 }
 
-func makeNetworkListKey() string {
-	return networkList
+func makeIPPoolUuid(namespace string, s, e, ip net.IP, uuid string) string {
+	return fmt.Sprintf(ipPoolUuid, namespace, s.String(), e.String(), ip.String(), uuid)
+}
+func makeIPUuidKey(namespace, s, e, ip string) string {
+	return fmt.Sprintf(ipPoolUuid, namespace, s, e, ip, "*")
+}
+func MakeUuidIPKey(namespace, s, e, uuid string) string {
+	return fmt.Sprintf(ipPoolUuid, namespace, s, e, "*", uuid)
+}
+func makePoolUuidIPListPattern(namespace string, s, e net.IP, uuid string) string {
+	return fmt.Sprintf(ipPoolUuid, namespace, s.String(), e.String(), "*", uuid)
 }
 
-func makeNetworkDetailsKey(ip *net.IPNet) string {
-	return fmt.Sprintf(networkDetails, ip.String())
+func parsePoolUuidIPKey(key string) (net.IP, net.IP, net.IP, string, error) {
+	d := strings.Split(key, ":")
+	if len(d) != 4 {
+		return nil, nil, nil, "", errors.New("Not matched format")
+	}
+	se := strings.Split(d[2], ",")
+	if len(se) != 4 {
+		return nil, nil, nil, "", errors.New("Not matched format")
+	}
+	s := net.ParseIP(se[0])
+	if s == nil {
+		return nil, nil, nil, "", errors.New("Failed parse IP")
+	}
+	e := net.ParseIP(se[1])
+	if e == nil {
+		return nil, nil, nil, "", errors.New("Failed parse IP")
+	}
+	ip := net.ParseIP(se[2])
+	if ip == nil {
+		return nil, nil, nil, "", errors.New("Failed parse IP")
+	}
+	return s, e, ip, se[3], nil
 }
 
-func makeNetworkPoolKey(ip *net.IPNet) string {
-	return makeNetworkDetailsKey(ip) + ":pools"
+func makeNetworkListKey(namespace string) string {
+	return fmt.Sprintf(networkList, namespace)
 }
 
-func makePoolDetailsKey(s, e net.IP) string {
-	return fmt.Sprintf(poolDetails, s.String(), e.String())
+func makeNetworkDetailsKey(namespace string, ip *net.IPNet) string {
+	return fmt.Sprintf(networkDetails, namespace, ip.String())
 }
 
-func makePoolListPattern() string {
-	return strings.Replace(poolDetails, "%s,%s", "*", 1)
+func makeNetworkPoolKey(namespace string, ip *net.IPNet) string {
+	return makeNetworkDetailsKey(namespace, ip) + ":pools"
 }
 
-func parsePoolDetailsKey(key string) (net.IP, net.IP, error) {
+func makePoolDetailsKey(namespace string, s, e net.IP) string {
+	return fmt.Sprintf(poolDetails, namespace, s.String(), e.String())
+}
+
+func makePoolListPattern(namespace string) string {
+	return fmt.Sprintf(strings.Replace(poolDetails, "%s,%s", "*", 1), namespace)
+}
+
+func ParsePoolDetailsKey(key string) (net.IP, net.IP, error) {
 	d := strings.Split(key, ":")
 	if len(d) != 3 {
 		return nil, nil, errors.New("Not matched format")
@@ -97,6 +135,6 @@ func parsePoolDetailsKey(key string) (net.IP, net.IP, error) {
 	return s, e, nil
 }
 
-func makePoolUsedIPZset(s, e net.IP) string {
-	return fmt.Sprintf(poolUsedIPZSet, s.String(), e.String())
+func makePoolUsedIPZSet(namespace string, s, e net.IP) string {
+	return fmt.Sprintf(poolUsedIPZSet, namespace, s.String(), e.String())
 }

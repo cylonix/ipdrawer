@@ -1,0 +1,70 @@
+syntax = "proto3";
+package model;
+
+import "buf/validate/validate.proto";
+import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+import "model/rules.proto";
+
+option (gogoproto.equal_all) = true;
+option go_package = "github.com/hatena/ipdrawer/gen/go/model";
+
+message Tag {
+  string key   = 1;
+  string value = 2;
+}
+
+message Pool {
+  enum Status {
+    UNKNOWN   = 0;
+    AVAILABLE = 1;
+    RESERVED  = 2;
+  }
+  string                    start            = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string                    end              = 2 [ (buf.validate.field).string.ipv4 = true ];
+  Status                    status           = 3;
+  repeated Tag              tags             = 4;
+  google.protobuf.Timestamp created_at       = 5 [ (gogoproto.stdtime) = true ];
+  google.protobuf.Timestamp last_modified_at = 6 [ (gogoproto.stdtime) = true ];
+  string                    namespace        = 7;
+}
+
+message IPAddr {
+  enum Status {
+    UNKNOWN = 0;
+    ACTIVE = 1;
+    TEMPORARY_RESERVED = 2;
+    RESERVED = 3;
+  }
+  string                    ip               = 1 [ (buf.validate.field).string.ipv4 = true ];
+  Status                    status           = 2;
+  repeated Tag              tags             = 3;
+  google.protobuf.Timestamp created_at       = 4 [ (gogoproto.stdtime) = true ];
+  google.protobuf.Timestamp last_modified_at = 5 [ (gogoproto.stdtime) = true ];
+  string                    uuid             = 6;
+  string                    namespace        = 7;
+}
+
+message Network {
+  enum Status {
+    UNKNOWN = 0;
+    AVAILABLE = 1;
+    RESERVED = 2;
+  }
+  // All gateways must be valid IP v4 addresses
+  option (buf.validate.message).cel = {
+    id: "Network.gateway"
+    message: "all gateways must be valid IP v4 addresses"
+    // `m.isIp(4)` must be true for all `m` in `this.gateways`
+    expression: "this.gateways.all(m, m.isIp(4))"
+  };
+  string                    prefix           = 1 [ (buf.validate.field).string.ipv4_prefix = true ];
+  repeated string           gateways         = 2;
+  string                    broadcast        = 3 [ (buf.validate.field).string.(ipv4_or_null) = true ];
+  string                    netmask          = 4 [ (buf.validate.field).string.(ipv4_or_null) = true ];
+  Status                    status           = 5;
+  repeated Tag              tags             = 6;
+  google.protobuf.Timestamp created_at       = 7 [ (gogoproto.stdtime) = true ];
+  google.protobuf.Timestamp last_modified_at = 8 [ (gogoproto.stdtime) = true ];
+  string                    namespace        = 9;
+}

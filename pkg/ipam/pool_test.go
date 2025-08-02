@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/net/context"
 
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
 )
 
@@ -28,14 +28,14 @@ func Test_getPools(t *testing.T) {
 		Status: model.Network_AVAILABLE,
 	}
 
-	if err := m.CreateNetwork(ctx, n); err != nil {
+	if err := m.CreateNetwork(ctx, testNS, n); err != nil {
 		t.Fatalf("CreateNetwork returns error %v; want success", err)
 	}
-	if err := m.CreatePool(ctx, n, pool); err != nil {
+	if err := m.CreatePool(ctx, testNS, n, pool); err != nil {
 		t.Fatalf("CreatePool returns error %v; want success", err)
 	}
 
-	pools, err := getPoolsInNetwork(r, n)
+	pools, err := getPoolsInNetwork(r, testNS, n)
 	if err != nil {
 		t.Fatalf("Got error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestSetPool(t *testing.T) {
 		End:   "10.0.0.254",
 	}
 
-	if err := setPool(r, pool); err != nil {
+	if err := setPool(r, testNS, pool); err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
 }

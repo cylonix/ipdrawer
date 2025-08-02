@@ -1,0 +1,26 @@
+syntax = "proto2";
+package model;
+
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/hatena/ipdrawer/gen/go/model";
+
+extend buf.validate.StringRules {
+  optional bool ipv4_or_null = 100001 [
+    (buf.validate.predefined).cel = {
+      id:         "string.ipv4_or_null"
+      message:    "must be valid IP v4 address or not set"
+      expression: "this.isIp(4) || this == \"\""
+    }
+  ];
+}
+
+extend buf.validate.Int32Rules {
+    optional bool ipv4_mask = 100001 [
+    (buf.validate.predefined).cel = {
+      id:         "ipv4_mask"
+      message:    "mask must be between 0 and 32"
+      expression: "this >= 0 && this <= 32"
+    }
+  ];
+}

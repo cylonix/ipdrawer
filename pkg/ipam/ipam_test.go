@@ -1,20 +1,22 @@
 package ipam
 
 import (
+	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/context"
 
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
-	"github.com/hatena/ipdrawer/pkg/utils/testutil"
 )
 
-func (m *IPManager) reserveTemporary(ip net.IP) {
-	_, _ = m.redis.Client.Set(makeIPTempReserved(ip), 1, 24*time.Hour).Result()
+func (m *IPManager) reserveTemporary(ip net.IP, uuid string) {
+	_, _ = m.redis.Client.Set(makeIPTempReserved(testNS, ip), uuid, 24*time.Hour).Result()
 }
 
 func TestIPActivation(t *testing.T) {
@@ -30,16 +32,16 @@ func TestIPActivation(t *testing.T) {
 		End:   "10.0.0.254",
 	}
 
-	if err := m.CreateIP(ctx, []*model.Pool{pool}, &model.IPAddr{Ip: "10.0.0.1"}); err != nil {
+	if err := m.CreateIP(ctx, []*model.Pool{pool}, &model.IPAddr{Namespace: testNS, Ip: "10.0.0.1"}); err != nil {
 		t.Fatalf("Got error: %v", err)
 	}
-	if err := m.CreateIP(ctx, []*model.Pool{pool}, &model.IPAddr{Ip: "10.0.0.4"}); err != nil {
+	if err := m.CreateIP(ctx, []*model.Pool{pool}, &model.IPAddr{Namespace: testNS, Ip: "10.0.0.4"}); err != nil {
 		t.Fatalf("Got error: %v", err)
 	}
 
 	s := net.ParseIP(pool.Start)
 	e := net.ParseIP(pool.End)
-	zkey := makePoolUsedIPZset(s, e)
+	zkey := makePoolUsedIPZSet(testNS, s, e)
 	cnt, err := r.Client.ZCard(zkey).Result()
 	if err != nil {
 		t.Errorf("Got error: %v", err)
@@ -53,112 +55,197 @@ func TestDrawIPSeq(t *testing.T) {
 	ctx := context.Background()
 
 	testCases := []struct {
-		pool     *model.Pool
-		ips      []*model.IPAddr
-		expected net.IP
-		errmsg   string
+		name           string
+		pool           *model.Pool
+		ips            []*model.IPAddr
+		expected       net.IP
+		wanted         string
+		mustHaveWanted bool
+		err            error
 	}{
 		{
+			name: "IP available in the middle of the range",
 			pool: &model.Pool{
 				Start: "10.0.0.1",
 				End:   "10.0.0.254",
 			},
 			ips: []*model.IPAddr{
 				{
-					Ip:     "10.0.0.1",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_ACTIVE,
 				}, {
-					Ip:     "10.0.0.3",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.3",
+					Status:    model.IPAddr_ACTIVE,
 				},
 			},
 			expected: net.ParseIP("10.0.0.2"),
 		},
 		{
+			name: "1st X IPs either temp reserved or active",
 			pool: &model.Pool{
 				Start: "10.0.0.1",
 				End:   "10.0.0.254",
 			},
 			ips: []*model.IPAddr{
 				{
-					Ip:     "10.0.0.1",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_ACTIVE,
 				}, {
-					Ip:     "10.0.0.2",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.3",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.3",
+					Status:    model.IPAddr_ACTIVE,
 				}, {
-					Ip:     "10.0.0.4",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.4",
+					Status:    model.IPAddr_ACTIVE,
 				},
 			},
 			expected: net.ParseIP("10.0.0.5"),
 		},
 		{
+			name: "1st X IPs all temp reserved",
 			pool: &model.Pool{
 				Start: "10.0.0.1",
 				End:   "10.0.0.254",
 			},
 			ips: []*model.IPAddr{
 				{
-					Ip:     "10.0.0.1",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.2",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.3",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.3",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.4",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.4",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				},
 			},
 			expected: net.ParseIP("10.0.0.5"),
 		},
 		{
+			name: "1st X IPs temp reserved and last Y IPs active",
 			pool: &model.Pool{
 				Start: "10.0.0.1",
 				End:   "10.0.0.254",
 			},
 			ips: []*model.IPAddr{
 				{
-					Ip:     "10.0.0.1",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.2",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.3",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.3",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.4",
-					Status: model.IPAddr_ACTIVE,
+					Namespace: testNS,
+					Ip:        "10.0.0.4",
+					Status:    model.IPAddr_ACTIVE,
 				},
 			},
 			expected: net.ParseIP("10.0.0.5"),
 		},
 		{
+			name: "No IP available",
 			pool: &model.Pool{
 				Start: "10.0.0.1",
 				End:   "10.0.0.2",
 			},
 			ips: []*model.IPAddr{
 				{
-					Ip:     "10.0.0.1",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				}, {
-					Ip:     "10.0.0.2",
-					Status: model.IPAddr_TEMPORARY_RESERVED,
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
 				},
 			},
-			errmsg: "Nothing IP to serve",
+			err: errNoIPAvailable,
+		},
+		{
+			name: "Want IP available",
+			pool: &model.Pool{
+				Start: "10.0.0.1",
+				End:   "10.0.0.5",
+			},
+			ips: []*model.IPAddr{
+				{
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				}, {
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				},
+			},
+			wanted:   "10.0.0.3",
+			expected: net.ParseIP("10.0.0.3"),
+		},
+		{
+			name: "Want IP not available",
+			pool: &model.Pool{
+				Start: "10.0.0.1",
+				End:   "10.0.0.5",
+			},
+			ips: []*model.IPAddr{
+				{
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				}, {
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				},
+			},
+			wanted:   "10.0.0.1",
+			expected: net.ParseIP("10.0.0.3"),
+		},
+		{
+			name: "Must have want IP not available",
+			pool: &model.Pool{
+				Start: "10.0.0.1",
+				End:   "10.0.0.5",
+			},
+			ips: []*model.IPAddr{
+				{
+					Namespace: testNS,
+					Ip:        "10.0.0.1",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				}, {
+					Namespace: testNS,
+					Ip:        "10.0.0.2",
+					Status:    model.IPAddr_TEMPORARY_RESERVED,
+				},
+			},
+			wanted:         "10.0.0.1",
+			mustHaveWanted: true,
+			err:            errAddrNotAvailable,
 		},
 	}
 
-	for i, c := range testCases {
+	for _, c := range testCases {
 		r, deferFunc := storage.NewTestRedis()
 		m := NewTestIPManager(r)
 
@@ -167,28 +254,18 @@ func TestDrawIPSeq(t *testing.T) {
 			case model.IPAddr_ACTIVE:
 				m.CreateIP(ctx, []*model.Pool{c.pool}, ip)
 			case model.IPAddr_TEMPORARY_RESERVED:
-				m.reserveTemporary(net.ParseIP(ip.Ip))
+				m.reserveTemporary(net.ParseIP(ip.Ip), ip.Uuid)
 			case model.IPAddr_RESERVED:
 				m.Reserve(c.pool, net.ParseIP(ip.Ip))
 			}
 		}
 
-		actual, err := m.DrawIP(ctx, c.pool, true, false)
-
-		if c.errmsg == "" {
-			if err != nil {
-				t.Errorf("#%d: Got error: %#+v", i, err)
-			}
-			if !c.expected.Equal(actual) {
-				t.Errorf("#%d: expected %#+v, but got %#+v", i, c.expected.String(), actual.String())
-			}
+		actual, err := m.DrawIP(ctx, testNS, c.pool, testUUID, c.wanted, false /* not random */, true, false, c.mustHaveWanted)
+		if c.err == nil {
+			assert.NoError(t, err)
+			assert.Equal(t, c.expected.String(), actual.String())
 		} else {
-			if err == nil {
-				t.Errorf("#%d: expected error message %sf", i, c.errmsg)
-			}
-			if !testutil.IsError(err, c.errmsg) {
-				t.Errorf("#%d: expected %q, but got %#+v", i, c.errmsg, err)
-			}
+			assert.ErrorIs(t, err, c.err)
 		}
 
 		deferFunc()
@@ -214,11 +291,11 @@ func TestDeactivateAfterActivating(t *testing.T) {
 
 	m.CreateIP(ctx, []*model.Pool{pool}, ip)
 
-	if err := m.Deactivate(ctx, []*model.Pool{pool}, ip); err != nil {
+	if err := m.Deactivate(ctx, testNS, []*model.Pool{pool}, ip); err != nil {
 		t.Errorf("Failed deactivating: %#+v", err)
 	}
 
-	keys, _ := r.Client.Keys(makeIPTempReserved(net.ParseIP(ip.Ip))).Result()
+	keys, _ := r.Client.Keys(makeIPTempReserved(testNS, net.ParseIP(ip.Ip))).Result()
 	if len(keys) != 0 {
 		t.Errorf("Deactivation should remove temporary reserved key")
 	}
@@ -278,7 +355,7 @@ func TestDeactivateIPInSeveralPools(t *testing.T) {
 
 	m.CreateIP(ctx, pools, ip)
 
-	if err := m.Deactivate(ctx, pools, ip); err != nil {
+	if err := m.Deactivate(ctx, testNS, pools, ip); err != nil {
 		t.Errorf("Deactivate(%v, %v) returns %#+v; want success", pools, ip, err)
 	}
 }
@@ -303,12 +380,13 @@ func TestCorrectDrawIPFromInclusivePools(t *testing.T) {
 	}
 
 	ip := &model.IPAddr{
-		Ip: "10.0.0.1",
+		Namespace: testNS,
+		Ip:        "10.0.0.1",
 	}
 
 	m.CreateIP(ctx, pools, ip)
 
-	actual, err := m.DrawIP(ctx, pools[1], true, false)
+	actual, err := m.DrawIP(ctx, testNS, pools[1], testUUID, "", false /* not random */, true, false, false)
 	if err != nil {
 		t.Errorf("DrawIP returns err(%v); want success", err)
 	}
@@ -317,6 +395,108 @@ func TestCorrectDrawIPFromInclusivePools(t *testing.T) {
 	}
 }
 
+func TestDrawIPRandom(t *testing.T) {
+	r, deferFunc := storage.NewTestRedis()
+	defer deferFunc()
+
+	m := NewTestIPManager(r)
+	ctx := context.Background()
+
+	// Create a larger pool to test segment randomization
+	pool := &model.Pool{
+		Start: "10.0.0.1",
+		End:   "10.0.3.254", // Spans multiple segments
+	}
+
+	// Pre-allocate some IPs
+	allocatedIPs := []*model.IPAddr{
+		{
+			Namespace: testNS,
+			Ip:        "10.0.0.1",
+			Status:    model.IPAddr_ACTIVE,
+		},
+		{
+			Namespace: testNS,
+			Ip:        "10.0.1.100",
+			Status:    model.IPAddr_ACTIVE,
+		},
+		{
+			Namespace: testNS,
+			Ip:        "10.0.2.200",
+			Status:    model.IPAddr_ACTIVE,
+		},
+	}
+
+	// Create the allocated IPs
+	for _, ip := range allocatedIPs {
+		err := m.CreateIP(ctx, []*model.Pool{pool}, ip)
+		assert.NoError(t, err)
+	}
+
+	// Track allocated IPs by segment and UUID
+	segmentResults := make(map[int]map[string]bool) // segment -> set of IPs
+	uuidToIP := make(map[string]string)             // uuid -> ip mapping
+
+	for i := 0; i < 4; i++ {
+		segmentResults[i] = make(map[string]bool)
+	}
+
+	// Test 1: Verify random distribution across segments
+	iterations := 50
+	for i := 0; i < iterations; i++ {
+		uuid := fmt.Sprintf("test-uuid-%d", i)
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false)
+		assert.NoError(t, err)
+
+		// Store UUID -> IP mapping
+		uuidToIP[uuid] = ip.String()
+
+		// Track segment distribution
+		ipParts := strings.Split(ip.String(), ".")
+		segment, err := strconv.Atoi(ipParts[2])
+		assert.NoError(t, err)
+
+		segmentResults[segment][ip.String()] = true
+	}
+
+	// Test 2: Verify same UUID gets same IP
+	for uuid, expectedIP := range uuidToIP {
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false)
+		assert.NoError(t, err)
+		assert.Equal(t, expectedIP, ip.String(),
+			"Same UUID %s should get same IP. Expected %s, got %s",
+			uuid, expectedIP, ip.String())
+	}
+
+	// Test 3: Verify segment distribution
+	segmentsWithMultipleIPs := 0
+	for segment, ips := range segmentResults {
+		if len(ips) > 1 {
+			segmentsWithMultipleIPs++
+		}
+		t.Logf("Segment %d had %d different IPs allocated", segment, len(ips))
+	}
+
+	assert.GreaterOrEqual(t, segmentsWithMultipleIPs, 3,
+		"Expected allocations spread across at least 3 segments, got %d segments",
+		segmentsWithMultipleIPs)
+
+	// Verify pre-allocated IPs were never returned
+	for _, ip := range allocatedIPs {
+		segment, _ := strconv.Atoi(strings.Split(ip.Ip, ".")[2])
+		assert.False(t, segmentResults[segment][ip.Ip],
+			"Pre-allocated IP %s should not be returned", ip.Ip)
+	}
+
+	// Clean up all IPs
+	for _, ip := range uuidToIP {
+		err := m.Deactivate(ctx, testNS, []*model.Pool{pool}, &model.IPAddr{
+			Namespace: testNS,
+			Ip:        ip,
+		})
+		assert.NoError(t, err)
+	}
+}
 func TestCreatePoolWhenExistingActivatedIP(t *testing.T) {
 	r, def := storage.NewTestRedis()
 	defer def()
@@ -326,12 +506,14 @@ func TestCreatePoolWhenExistingActivatedIP(t *testing.T) {
 
 	ips := []*model.IPAddr{
 		{
-			Ip:     "192.168.0.1",
-			Status: model.IPAddr_ACTIVE,
+			Namespace: testNS,
+			Ip:        "192.168.0.1",
+			Status:    model.IPAddr_ACTIVE,
 		},
 		{
-			Ip:     "192.168.0.11",
-			Status: model.IPAddr_ACTIVE,
+			Namespace: testNS,
+			Ip:        "192.168.0.11",
+			Status:    model.IPAddr_ACTIVE,
 		},
 	}
 	for _, ip := range ips {
@@ -347,11 +529,11 @@ func TestCreatePoolWhenExistingActivatedIP(t *testing.T) {
 		Start: "192.168.0.1",
 		End:   "192.168.0.10",
 	}
-	if err := m.CreatePool(ctx, network, pool); err != nil {
+	if err := m.CreatePool(ctx, testNS, network, pool); err != nil {
 		t.Fatalf("CreatePool returns error %v; want success", err)
 	}
 
-	num, err := r.Client.ZCard(makePoolUsedIPZset(net.ParseIP(pool.Start), net.ParseIP(pool.End))).Result()
+	num, err := r.Client.ZCard(makePoolUsedIPZSet(testNS, net.ParseIP(pool.Start), net.ParseIP(pool.End))).Result()
 	if err != nil {
 		t.Errorf("ZCard returns error %v; want success", err)
 	}
@@ -373,25 +555,25 @@ func TestDeletePool(t *testing.T) {
 		End:   "192.168.0.10",
 	}
 
-	if err := m.CreateNetwork(ctx, network); err != nil {
+	if err := m.CreateNetwork(ctx, testNS, network); err != nil {
 		t.Fatalf("CreateNetwork returns error `%v`; want success", err)
 	}
 
-	if err := m.CreatePool(ctx, network, pool); err != nil {
+	if err := m.CreatePool(ctx, testNS, network, pool); err != nil {
 		t.Fatalf("CreatePool returns error `%v`; want success", err)
 	}
 
-	if err := m.DeletePool(ctx, net.ParseIP(pool.Start), net.ParseIP(pool.End)); err != nil {
+	if err := m.DeletePool(ctx, testNS, net.ParseIP(pool.Start), net.ParseIP(pool.End)); err != nil {
 		t.Fatalf("DeletePool returns error `%v`; want success", err)
 	}
 
-	pools, err := m.GetPools(ctx)
+	pools, err := m.GetPools(ctx, testNS)
 	if err != nil {
 		t.Fatalf("GetPools returns error `%v`; want success", err)
 	}
 	assert.Equal(t, 0, len(pools), "there should be no pools")
 
-	nothing, err := m.GetPoolsInNetwork(ctx, network)
+	nothing, err := m.GetPoolsInNetwork(ctx, testNS, network)
 	if err != nil {
 		t.Fatalf("GetPoolsInNetwork returns error `%v`; want success", err)
 	}

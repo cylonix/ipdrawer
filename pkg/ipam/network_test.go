@@ -4,9 +4,10 @@ import (
 	"net"
 	"testing"
 
-	"github.com/hatena/ipdrawer/pkg/model"
+	"github.com/hatena/ipdrawer/gen/go/model"
 	"github.com/hatena/ipdrawer/pkg/storage"
 	"github.com/hatena/ipdrawer/pkg/utils/netutil"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -30,7 +31,7 @@ func TestSetNetwork(t *testing.T) {
 	r, deferFunc := storage.NewTestRedis()
 	defer deferFunc()
 
-	err := setNetwork(r, testNetwork)
+	err := setNetwork(r, testNS, testNetwork)
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
 	}
@@ -40,13 +41,13 @@ func TestGetNetwork(t *testing.T) {
 	r, def := storage.NewTestRedis()
 	defer def()
 
-	_ = setNetwork(r, testNetwork)
+	_ = setNetwork(r, testNS, testNetwork)
 
-	resp, err := getNetwork(r, testPrefix)
+	resp, err := getNetwork(r, testNS, testPrefix)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
-	if !resp.Equal(testNetwork) {
+	if !proto.Equal(resp, testNetwork) {
 		t.Errorf("Got wrong Network %v; want %v", resp, testNetwork)
 	}
 }
@@ -65,12 +66,12 @@ func TestGetNetworks(t *testing.T) {
 	}
 
 	for _, n := range networks {
-		if err := setNetwork(r, n); err != nil {
+		if err := setNetwork(r, testNS, n); err != nil {
 			t.Fatalf("Got error %v; want success", err)
 		}
 	}
 
-	resp, err := getNetworks(r)
+	resp, err := getNetworks(r, testNS)
 	if err != nil {
 		t.Fatalf("Got error %v; want success", err)
 	}
@@ -111,7 +112,7 @@ func TestSetNetworkWithInvalidModel(t *testing.T) {
 	}
 
 	for i, tc := range testCases {
-		err := setNetwork(r, tc.model)
+		err := setNetwork(r, testNS, tc.model)
 		if err == nil {
 			t.Errorf("#%d(%s): got no error; want error", i, tc.desc)
 		}
@@ -122,16 +123,16 @@ func TestGetNetworkIncludingPool(t *testing.T) {
 	r, def := storage.NewTestRedis()
 	defer def()
 
-	err := setNetwork(r, testNetwork)
+	err := setNetwork(r, testNS, testNetwork)
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
 	}
 
-	n, err := getNetworkIncludingPool(r, net.ParseIP("192.168.0.10"), net.ParseIP("192.168.0.12"))
+	n, err := getNetworkIncludingPool(r, testNS, net.ParseIP("192.168.0.10"), net.ParseIP("192.168.0.12"))
 	if err != nil {
 		t.Fatalf("Got error: %v; want success", err)
 	}
-	if !n.Equal(testNetwork) {
+	if !proto.Equal(n, testNetwork) {
 		t.Fatalf("Got wrong network: %v", n)
 	}
 }
