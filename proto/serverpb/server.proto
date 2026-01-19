@@ -26,6 +26,8 @@ message DrawIPRequest {
   string          namespace          = 9;
   bool            must_have_want_ip  = 10;
   bool            sequential         = 11; // Default false i.e. randomized
+  // IPv4 prefix to exclude from allocation (e.g., "10.0.0.0/24"). Optional.
+  string          exclude            = 12 [ (buf.validate.field).string.(model.ipv4_prefix_or_null) = true ];
 }
 
 message DrawIPResponse {

@@ -28,6 +28,8 @@ type NetworkServiceV0DrawIPBody struct {
 	UUID              *string   `json:"uuid,omitempty"`
 	MustHaveWantIP    *bool     `json:"mustHaveWantIp,omitempty"`
 	Sequential        *bool     `json:"sequential,omitempty"`
+	// IPv4 prefix to exclude from allocation (e.g., \"10.0.0.0/24\"). Optional.
+	Exclude *string `json:"exclude,omitempty"`
 }
 
 // NewNetworkServiceV0DrawIPBody instantiates a new NetworkServiceV0DrawIPBody object
@@ -303,6 +305,38 @@ func (o *NetworkServiceV0DrawIPBody) SetSequential(v bool) {
 	o.Sequential = &v
 }
 
+// GetExclude returns the Exclude field value if set, zero value otherwise.
+func (o *NetworkServiceV0DrawIPBody) GetExclude() string {
+	if o == nil || IsNil(o.Exclude) {
+		var ret string
+		return ret
+	}
+	return *o.Exclude
+}
+
+// GetExcludeOk returns a tuple with the Exclude field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *NetworkServiceV0DrawIPBody) GetExcludeOk() (*string, bool) {
+	if o == nil || IsNil(o.Exclude) {
+		return nil, false
+	}
+	return o.Exclude, true
+}
+
+// HasExclude returns a boolean if a field has been set.
+func (o *NetworkServiceV0DrawIPBody) HasExclude() bool {
+	if o != nil && !IsNil(o.Exclude) {
+		return true
+	}
+
+	return false
+}
+
+// SetExclude gets a reference to the given string and assigns it to the Exclude field.
+func (o *NetworkServiceV0DrawIPBody) SetExclude(v string) {
+	o.Exclude = &v
+}
+
 func (o NetworkServiceV0DrawIPBody) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -336,6 +370,9 @@ func (o NetworkServiceV0DrawIPBody) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Sequential) {
 		toSerialize["sequential"] = o.Sequential
+	}
+	if !IsNil(o.Exclude) {
+		toSerialize["exclude"] = o.Exclude
 	}
 	return toSerialize, nil
 }

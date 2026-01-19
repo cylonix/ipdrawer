@@ -1165,6 +1165,10 @@ const (
         "sequential": {
           "type": "boolean",
           "title": "Default false i.e. randomized"
+        },
+        "exclude": {
+          "type": "string",
+          "description": "IPv4 prefix to exclude from allocation (e.g., \"10.0.0.0/24\"). Optional."
         }
       }
     },

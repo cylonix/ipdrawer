@@ -8,7 +8,6 @@ package serverpb
 
 import (
 	context "context"
-
 	model "github.com/hatena/ipdrawer/gen/go/model"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"

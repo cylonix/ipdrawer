@@ -155,10 +155,20 @@ func (api *APIServer) DrawIP(
 	if wantIP == "" && req.MustHaveWantIp {
 		return nil, status.Error(codes.InvalidArgument, "must have valid ip if must assign the specific address")
 	}
+
+	// Parse exclude prefix if provided
+	var excludeNet *net.IPNet
+	if req.Exclude != "" {
+		_, excludeNet, err = net.ParseCIDR(req.Exclude)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid exclude prefix: %v", err)
+		}
+	}
+
 	for _, p := range target {
 		ret, err := api.manager.DrawIP(
 			ctx, namespace, p, req.Uuid, wantIP, !req.Sequential, /* random */
-			true, false, req.MustHaveWantIp,
+			true, false, req.MustHaveWantIp, excludeNet,
 		)
 		if err != nil {
 			// log or return error?
@@ -235,7 +245,7 @@ func (api *APIServer) DrawIPEstimatingNetwork(
 		Mask:              int32(ones),
 		PoolTag:           req.PoolTag,
 		TemporaryReserved: req.TemporaryReserved,
-		Sequential: 	   req.Sequential,
+		Sequential:        req.Sequential,
 	})
 }
 

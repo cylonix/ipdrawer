@@ -1,5 +1,5 @@
 NAME           := ipdrawer
-RELEASE_TAG    ?= v2.0
+RELEASE_TAG    ?= v2.1
 VERSION        := $(shell git describe --tags --exact-match 2> /dev/null || git rev-parse --short HEAD || echo "unknown")
 REVISION       := $(shell git rev-parse HEAD)
 SRCS           := $(shell find . -type f -name '*.go')
@@ -104,3 +104,26 @@ docker:
 .PHONY: clean
 clean:
 	rm -rf $(NAME) dist
+
+# Stress tests for IPAM performance
+.PHONY: stress-test
+stress-test:
+	@echo "Running IPAM stress tests (/16 and /18 pools)..."
+	go test ./pkg/ipam/... -v -run "TestStressLargePool|TestStressCompareAlgorithms" -timeout 10m
+
+.PHONY: stress-test-large
+stress-test-large:
+	@echo "Running IPAM stress test on /12 pool (1M IPs)..."
+	@echo "This test requires RUN_VERY_LARGE_POOL_TEST=1 environment variable"
+	RUN_VERY_LARGE_POOL_TEST=1 go test ./pkg/ipam/... -v -run "TestStressVeryLargePool" -timeout 20m
+
+.PHONY: stress-test-production
+stress-test-production:
+	@echo "Running IPAM stress test on /10 pool (4M IPs) - Production scale..."
+	@echo "This test requires RUN_PRODUCTION_POOL_TEST=1 environment variable"
+	@echo "WARNING: This test takes ~3 minutes and uses significant memory"
+	RUN_PRODUCTION_POOL_TEST=1 go test ./pkg/ipam/... -v -run "TestStressProductionPool" -timeout 30m
+
+.PHONY: stress-test-all
+stress-test-all: stress-test stress-test-large stress-test-production
+	@echo "All stress tests completed"

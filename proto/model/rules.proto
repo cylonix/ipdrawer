@@ -24,3 +24,13 @@ extend buf.validate.Int32Rules {
     }
   ];
 }
+
+extend buf.validate.StringRules {
+  optional bool ipv4_prefix_or_null = 100002 [
+    (buf.validate.predefined).cel = {
+      id:         "string.ipv4_prefix_or_null"
+      message:    "must be valid IPv4 prefix (e.g., 10.0.0.0/8) or not set"
+      expression: "this == \"\" || this.isIpPrefix(4)"
+    }
+  ];
+}

@@ -176,7 +176,7 @@ func (m *IPManager) temporaryReserveIP(namespace, uuid string, s, e, avail net.I
 	return avail, nil
 }
 
-func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, log *logrus.Entry) (net.IP, error) {
+func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, excludeNet *net.IPNet, log *logrus.Entry) (net.IP, error) {
 	zkey := makePoolUsedIPZSet(namespace, s, e)
 	zset, err := m.redis.Client.ZRange(zkey, 0, -1).Result()
 	if err != nil {
@@ -230,6 +230,11 @@ func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, log
 				continue
 			}
 
+			// Skip if IP falls within exclude prefix
+			if excludeNet != nil && excludeNet.Contains(avail) {
+				continue
+			}
+
 			logger := log.WithField("ip", avail.String())
 			if !m.checkTempReserved(namespace, uuid, avail, logger) {
 				continue
@@ -246,7 +251,8 @@ func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, log
 	}
 
 	// Fall back to an IP that was used by other UUID if available
-	if usedByOtherUUID != nil {
+	// but only if it's not excluded
+	if usedByOtherUUID != nil && (excludeNet == nil || !excludeNet.Contains(usedByOtherUUID)) {
 		logger := log.WithField("ip", usedByOtherUUID.String())
 		return m.temporaryReserveIP(namespace, uuid, s, e, usedByOtherUUID, logger)
 	}
@@ -256,7 +262,7 @@ func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, log
 
 // CheckUsedPoolSequential walks for all the addresses from s to e for an address that is
 // not in used pool yet.
-func (m *IPManager) CheckUsedPoolSequential(namespace, uuid string, s, e net.IP, log *logrus.Entry) (net.IP, error) {
+func (m *IPManager) CheckUsedPoolSequential(namespace, uuid string, s, e net.IP, excludeNet *net.IPNet, log *logrus.Entry) (net.IP, error) {
 	zkey := makePoolUsedIPZSet(namespace, s, e)
 	zset, err := m.redis.Client.ZRange(zkey, 0, -1).Result()
 	if err != nil {
@@ -268,6 +274,10 @@ func (m *IPManager) CheckUsedPoolSequential(namespace, uuid string, s, e net.IP,
 	for i, avail := 0, s; !nu.PrevIP(avail).Equal(e); avail = nu.NextIP(avail) {
 		if isIPInUsedZSet(avail, i, zset) {
 			i += 1
+			continue
+		}
+		// Skip if IP falls within exclude prefix
+		if excludeNet != nil && excludeNet.Contains(avail) {
 			continue
 		}
 		logger := log.WithField("ip", avail.String())
@@ -284,7 +294,8 @@ func (m *IPManager) CheckUsedPoolSequential(namespace, uuid string, s, e net.IP,
 	}
 	// OK we failed to get a free IP if trying to avoid any IP ever used by
 	// other UUIDs. Add this UUID to the list of lucky guys.
-	if usedByOtherUUID != nil {
+	// but only if it's not excluded
+	if usedByOtherUUID != nil && (excludeNet == nil || !excludeNet.Contains(usedByOtherUUID)) {
 		avail := usedByOtherUUID
 		logger := log.WithField("ip", avail.String())
 		return m.temporaryReserveIP(namespace, uuid, s, e, avail, logger)
@@ -293,7 +304,7 @@ func (m *IPManager) CheckUsedPoolSequential(namespace, uuid string, s, e net.IP,
 }
 
 // DrawIP returns an available IP.
-func (m *IPManager) DrawIP(ctx context.Context, namespace string, pool *model.Pool, uuid, wantIP string, random, reserve, ping, mustHaveWantIP bool) (net.IP, error) {
+func (m *IPManager) DrawIP(ctx context.Context, namespace string, pool *model.Pool, uuid, wantIP string, random, reserve, ping, mustHaveWantIP bool, excludeNet *net.IPNet) (net.IP, error) {
 	span, ctx := tracing.StartSpanFromContext(ctx, "IPManager.DrawIP")
 	span.SetTag("pool", pm.PoolKey(pool))
 	defer span.Finish()
@@ -304,6 +315,7 @@ func (m *IPManager) DrawIP(ctx context.Context, namespace string, pool *model.Po
 		"uuid":              uuid,
 		"want-ip":           wantIP,
 		"mast-have-want-ip": mustHaveWantIP,
+		"exclude":           excludeNet,
 	})
 	log.Infoln("draw-ip")
 	token, err := m.locker.Lock(ctx, makeGlobalLock())
@@ -322,7 +334,12 @@ func (m *IPManager) DrawIP(ctx context.Context, namespace string, pool *model.Po
 		if avail == nil {
 			return nil, fmt.Errorf("invalid ip '%v' wanted", wantIP)
 		}
-		if m.isIPAvailable(namespace, uuid, avail, log) {
+		// Check if wanted IP falls within exclude prefix
+		if excludeNet != nil && excludeNet.Contains(avail) {
+			if mustHaveWantIP {
+				return nil, fmt.Errorf("%w: ip '%v' wanted but is excluded by prefix %v", errAddrNotAvailable, wantIP, excludeNet)
+			}
+		} else if m.isIPAvailable(namespace, uuid, avail, log) {
 			return m.temporaryReserveIP(namespace, uuid, s, e, avail, log)
 		}
 		if mustHaveWantIP {
@@ -336,16 +353,17 @@ func (m *IPManager) DrawIP(ctx context.Context, namespace string, pool *model.Po
 		if err != nil {
 			return nil, err
 		}
-		if avail != nil {
+		// Check if the UUID's last IP is excluded
+		if avail != nil && (excludeNet == nil || !excludeNet.Contains(avail)) {
 			return avail, nil
 		}
 		// Fall through
 	}
 	// Look it up from the rest of the free entries
 	if random {
-		return m.checkUsedPoolRandom(namespace, uuid, s, e, log)
+		return m.checkUsedPoolRandom(namespace, uuid, s, e, excludeNet, log)
 	}
-	return m.CheckUsedPoolSequential(namespace, uuid, s, e, log)
+	return m.CheckUsedPoolSequential(namespace, uuid, s, e, excludeNet, log)
 }
 
 // CreateIP activates IP.

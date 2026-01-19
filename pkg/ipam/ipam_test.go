@@ -260,7 +260,7 @@ func TestDrawIPSeq(t *testing.T) {
 			}
 		}
 
-		actual, err := m.DrawIP(ctx, testNS, c.pool, testUUID, c.wanted, false /* not random */, true, false, c.mustHaveWanted)
+		actual, err := m.DrawIP(ctx, testNS, c.pool, testUUID, c.wanted, false /* not random */, true, false, c.mustHaveWanted, nil /* no exclude */)
 		if c.err == nil {
 			assert.NoError(t, err)
 			assert.Equal(t, c.expected.String(), actual.String())
@@ -386,7 +386,7 @@ func TestCorrectDrawIPFromInclusivePools(t *testing.T) {
 
 	m.CreateIP(ctx, pools, ip)
 
-	actual, err := m.DrawIP(ctx, testNS, pools[1], testUUID, "", false /* not random */, true, false, false)
+	actual, err := m.DrawIP(ctx, testNS, pools[1], testUUID, "", false /* not random */, true, false, false, nil /* no exclude */)
 	if err != nil {
 		t.Errorf("DrawIP returns err(%v); want success", err)
 	}
@@ -445,7 +445,7 @@ func TestDrawIPRandom(t *testing.T) {
 	iterations := 50
 	for i := 0; i < iterations; i++ {
 		uuid := fmt.Sprintf("test-uuid-%d", i)
-		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false)
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false, nil /* no exclude */)
 		assert.NoError(t, err)
 
 		// Store UUID -> IP mapping
@@ -461,7 +461,7 @@ func TestDrawIPRandom(t *testing.T) {
 
 	// Test 2: Verify same UUID gets same IP
 	for uuid, expectedIP := range uuidToIP {
-		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false)
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false, nil /* no exclude */)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedIP, ip.String(),
 			"Same UUID %s should get same IP. Expected %s, got %s",
@@ -579,3 +579,131 @@ func TestDeletePool(t *testing.T) {
 	}
 	assert.Empty(t, nothing, "there should be no pool in the network")
 }
+
+func TestDrawIPWithExclude(t *testing.T) {
+	r, deferFunc := storage.NewTestRedis()
+	defer deferFunc()
+
+	m := NewTestIPManager(r)
+	ctx := context.Background()
+
+	// Create a pool similar to CGNAT range 100.64.0.0/10
+	// This spans 100.64.0.0 - 100.127.255.255 (4M IPs)
+	// We'll use a smaller subset for testing
+	pool := &model.Pool{
+		Start: "100.115.90.1",
+		End:   "100.115.95.254",
+	}
+
+	// ChromeOS VM range to exclude: 100.115.92.0/23
+	// This covers 100.115.92.0 - 100.115.93.255
+	_, excludeNet, err := net.ParseCIDR("100.115.92.0/23")
+	assert.NoError(t, err)
+
+	// Track allocated IPs
+	allocatedIPs := make(map[string]bool)
+	excludedIPCount := 0
+	validIPCount := 0
+
+	// Allocate many IPs and verify none fall in the excluded range
+	iterations := 100
+	for i := 0; i < iterations; i++ {
+		uuid := fmt.Sprintf("exclude-test-uuid-%d", i)
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", true /* random */, true, false, false, excludeNet)
+		assert.NoError(t, err)
+
+		ipStr := ip.String()
+
+		// Check IP is not in excluded range
+		if excludeNet.Contains(ip) {
+			excludedIPCount++
+			t.Errorf("Allocated IP %s falls within excluded range %s", ipStr, excludeNet.String())
+		} else {
+			validIPCount++
+		}
+
+		// Check for duplicates
+		if allocatedIPs[ipStr] {
+			t.Errorf("Duplicate IP allocated: %s", ipStr)
+		}
+		allocatedIPs[ipStr] = true
+	}
+
+	t.Logf("Allocated %d IPs, %d valid (outside exclude), %d in excluded range",
+		iterations, validIPCount, excludedIPCount)
+	assert.Equal(t, 0, excludedIPCount, "No IPs should be allocated in excluded range")
+	assert.Equal(t, iterations, validIPCount, "All IPs should be outside excluded range")
+
+	// Verify allocated IPs are in valid ranges
+	// Valid ranges: 100.115.90.1 - 100.115.91.255 and 100.115.94.0 - 100.115.95.254
+	for ipStr := range allocatedIPs {
+		ip := net.ParseIP(ipStr)
+		parts := strings.Split(ipStr, ".")
+		thirdOctet, _ := strconv.Atoi(parts[2])
+
+		// Should be in 90-91 or 94-95 range
+		validRange := (thirdOctet >= 90 && thirdOctet <= 91) || (thirdOctet >= 94 && thirdOctet <= 95)
+		assert.True(t, validRange, "IP %s should be in valid range (90-91 or 94-95), got third octet %d", ipStr, thirdOctet)
+
+		// Double-check not in excluded range
+		assert.False(t, excludeNet.Contains(ip), "IP %s should not be in excluded range", ipStr)
+	}
+}
+
+func TestDrawIPWithExcludeSequential(t *testing.T) {
+	r, deferFunc := storage.NewTestRedis()
+	defer deferFunc()
+
+	m := NewTestIPManager(r)
+	ctx := context.Background()
+
+	// Pool that spans the excluded range with enough IPs
+	// Range: 100.115.91.250 - 100.115.94.50
+	// Usable: 91.250-91.255 (6 IPs) + 94.0-94.50 (51 IPs) = 57 IPs
+	// Excluded: 92.0-93.255 (512 IPs)
+	pool := &model.Pool{
+		Start: "100.115.91.250",
+		End:   "100.115.94.50",
+	}
+
+	// Exclude 100.115.92.0/23 (100.115.92.0 - 100.115.93.255)
+	_, excludeNet, err := net.ParseCIDR("100.115.92.0/23")
+	assert.NoError(t, err)
+
+	// Sequential allocation should skip from 100.115.91.255 to 100.115.94.0
+	allocatedIPs := []string{}
+
+	// Allocate 15 IPs - enough to cross the excluded range
+	for i := 0; i < 15; i++ {
+		uuid := fmt.Sprintf("seq-exclude-test-%d", i)
+		ip, err := m.DrawIP(ctx, testNS, pool, uuid, "", false /* sequential */, true, false, false, excludeNet)
+		assert.NoError(t, err)
+
+		ipStr := ip.String()
+		allocatedIPs = append(allocatedIPs, ipStr)
+
+		// Verify not in excluded range
+		assert.False(t, excludeNet.Contains(ip), "Sequential IP %s should not be in excluded range", ipStr)
+	}
+
+	t.Logf("Sequential allocation with exclude: %v", allocatedIPs)
+
+	// First allocations should be in 100.115.91.x range
+	// Then jump to 100.115.94.x range
+	foundJump := false
+	for i := 1; i < len(allocatedIPs); i++ {
+		prevParts := strings.Split(allocatedIPs[i-1], ".")
+		currParts := strings.Split(allocatedIPs[i], ".")
+		prevThird, _ := strconv.Atoi(prevParts[2])
+		currThird, _ := strconv.Atoi(currParts[2])
+
+		// Check for jump from 91 to 94 (skipping 92 and 93)
+		if prevThird == 91 && currThird == 94 {
+			foundJump = true
+			t.Logf("Found expected jump from %s to %s (skipping excluded range)", allocatedIPs[i-1], allocatedIPs[i])
+		}
+	}
+
+	assert.True(t, foundJump, "Sequential allocation should jump over excluded range 92-93")
+}
+
