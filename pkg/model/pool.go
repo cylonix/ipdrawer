@@ -1,22 +1,27 @@
 package model
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 
 	"github.com/hatena/ipdrawer/gen/go/model"
-	nu "github.com/hatena/ipdrawer/pkg/utils/netutil"
 )
 
 func PoolKey(p *model.Pool) string {
 	return fmt.Sprintf("%s,%s", p.Start, p.End)
 }
 
+// PoolContains reports whether ip falls within the pool's [Start, End] range.
+// It compares the canonical 16-byte forms so it works for both IPv4 and IPv6.
 func PoolContains(p *model.Pool, ip net.IP) bool {
-	s := nu.IP2Uint(net.ParseIP(p.Start))
-	e := nu.IP2Uint(net.ParseIP(p.End))
-	i := nu.IP2Uint(ip)
-	return s <= i && i <= e
+	s := net.ParseIP(p.Start)
+	e := net.ParseIP(p.End)
+	if s == nil || e == nil || ip == nil {
+		return false
+	}
+	si, ei, i := s.To16(), e.To16(), ip.To16()
+	return bytes.Compare(i, si) >= 0 && bytes.Compare(i, ei) <= 0
 }
 
 func PoolMatchTags(p *model.Pool, tags []*model.Tag) bool {

@@ -33,12 +33,16 @@ func makeIPListPattern(namespace string) string {
 	return fmt.Sprintf(ipDetails, namespace, "*")
 }
 
+// parseIPDetailsKey parses a "<namespace>:ip:<ip>:<suffix>" key (suffix is
+// "details" or "temporary_reserved"). The IP may be an IPv6 literal containing
+// colons, so we anchor on the fixed leading tokens ("<namespace>", "ip"), drop
+// the trailing suffix token, and rejoin the middle as the address.
 func parseIPDetailsKey(key string) (net.IP, error) {
 	d := strings.Split(key, ":")
-	if len(d) != 4 {
+	if len(d) < 4 || d[1] != "ip" {
 		return nil, errors.New("Not matched format")
 	}
-	ip := d[2]
+	ip := strings.Join(d[2:len(d)-1], ":")
 	addr := net.ParseIP(ip)
 	if addr == nil {
 		return nil, errors.New("Failed parse IP")
@@ -71,12 +75,17 @@ func makePoolUuidIPListPattern(namespace string, s, e net.IP, uuid string) strin
 	return fmt.Sprintf(ipPoolUuid, namespace, s.String(), e.String(), "*", uuid)
 }
 
+// parsePoolUuidIPKey parses a "<namespace>:ip:<start>,<end>,<ip>,<uuid>:uuid"
+// key. The start/end/ip components may be IPv6 literals containing colons, so we
+// anchor on the leading ("<namespace>", "ip") and trailing ("uuid") tokens and
+// rejoin the middle before splitting it on commas (IPv6 uses colons, not commas,
+// so the comma split is unambiguous).
 func parsePoolUuidIPKey(key string) (net.IP, net.IP, net.IP, string, error) {
 	d := strings.Split(key, ":")
-	if len(d) != 4 {
+	if len(d) < 4 || d[1] != "ip" || d[len(d)-1] != "uuid" {
 		return nil, nil, nil, "", errors.New("Not matched format")
 	}
-	se := strings.Split(d[2], ",")
+	se := strings.Split(strings.Join(d[2:len(d)-1], ":"), ",")
 	if len(se) != 4 {
 		return nil, nil, nil, "", errors.New("Not matched format")
 	}
@@ -115,12 +124,16 @@ func makePoolListPattern(namespace string) string {
 	return fmt.Sprintf(strings.Replace(poolDetails, "%s,%s", "*", 1), namespace)
 }
 
+// ParsePoolDetailsKey parses a "<namespace>:pool:<start>,<end>:details" key. The
+// start/end components may be IPv6 literals containing colons, so we anchor on
+// the leading ("<namespace>", "pool") and trailing ("details") tokens and rejoin
+// the middle before splitting it on the comma.
 func ParsePoolDetailsKey(key string) (net.IP, net.IP, error) {
 	d := strings.Split(key, ":")
-	if len(d) != 3 {
+	if len(d) < 4 || d[1] != "pool" || d[len(d)-1] != "details" {
 		return nil, nil, errors.New("Not matched format")
 	}
-	se := strings.Split(d[1], ",")
+	se := strings.Split(strings.Join(d[2:len(d)-1], ":"), ",")
 	if len(se) != 2 {
 		return nil, nil, errors.New("Not matched format")
 	}

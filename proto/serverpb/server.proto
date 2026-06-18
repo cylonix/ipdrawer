@@ -26,7 +26,8 @@ message DrawIPRequest {
   string          namespace          = 9;
   bool            must_have_want_ip  = 10;
   bool            sequential         = 11; // Default false i.e. randomized
-  // IPv4 prefix to exclude from allocation (e.g., "10.0.0.0/24"). Optional.
+  // IP prefix to exclude from allocation (e.g., "10.0.0.0/24" or
+  // "2001:db8::/64"). Optional.
   string          exclude            = 12 [ (buf.validate.field).string.(model.ipv4_prefix_or_null) = true ];
 }
 
@@ -43,21 +44,21 @@ message DrawIPEstimatingNetworkRequest {
 }
 
 message GetNetworkIncludingIPRequest {
-  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string ip        = 1 [ (buf.validate.field).string.ip = true ];
   string namespace = 2;
 }
 
 message CreateIPResponse {}
 
 message ActivateIPRequest {
-  string             ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string             ip        = 1 [ (buf.validate.field).string.ip = true ];
   repeated model.Tag tags      = 2;
   string             uuid      = 3;
   string             namespace = 4;
 }
 
 message DeactivateIPRequest {
-  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string ip        = 1 [ (buf.validate.field).string.ip = true ];
   string namespace = 2;
 }
 
@@ -75,7 +76,7 @@ message GetNetworkRequest {
 message GetEstimatedNetworkRequest { string namespace = 1; }
 
 message GetNetworkResponse {
-  string             network          = 1 [ (buf.validate.field).string.ipv4_prefix = true ];
+  string             network          = 1 [ (buf.validate.field).string.ip_prefix = true ];
   repeated string    default_gateways = 2;
   string             broadcast        = 3;
   string             netmask          = 4;
@@ -83,7 +84,7 @@ message GetNetworkResponse {
 }
 
 message CreateNetworkRequest {
-  string               ip               = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string               ip               = 1 [ (buf.validate.field).string.ip = true ];
   int32                mask             = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
   repeated string      default_gateways = 3;
   repeated model.Tag   tags             = 4;
@@ -94,7 +95,7 @@ message CreateNetworkRequest {
 message CreateNetworkResponse {}
 
 message GetPoolsInNetworkRequest {
-  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string ip        = 1 [ (buf.validate.field).string.ip = true ];
   int32  mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
   string namespace = 3;
 }
@@ -102,7 +103,7 @@ message GetPoolsInNetworkRequest {
 message GetPoolsInNetworkResponse { repeated model.Pool pools = 1; }
 
 message CreatePoolRequest {
-  string     ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string     ip        = 1 [ (buf.validate.field).string.ip = true ];
   int32      mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
   model.Pool pool      = 3;
   string     namespace = 4;
@@ -111,7 +112,7 @@ message CreatePoolRequest {
 message CreatePoolResponse {}
 
 message DeleteNetworkRequest {
-  string ip        = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string ip        = 1 [ (buf.validate.field).string.ip = true ];
   int32  mask      = 2 [ (buf.validate.field).int32.(model.ipv4_mask) = true ];
   string namespace = 3;
 }
@@ -133,8 +134,8 @@ message ListPoolRequest { string namespace = 1; }
 message ListPoolResponse { repeated model.Pool pools = 1; }
 
 message GetIPInPoolRequest {
-  string range_start = 1 [ (buf.validate.field).string.ipv4 = true ];
-  string range_end   = 2 [ (buf.validate.field).string.ipv4 = true ];
+  string range_start = 1 [ (buf.validate.field).string.ip = true ];
+  string range_end   = 2 [ (buf.validate.field).string.ip = true ];
   string namespace   = 3;
 }
 
@@ -146,8 +147,8 @@ message GetIPInPoolResponse {
 message UpdatePoolResponse {}
 
 message DeletePoolRequest {
-  string range_start = 1 [ (buf.validate.field).string.ipv4 = true ];
-  string range_end   = 2 [ (buf.validate.field).string.ipv4 = true ];
+  string range_start = 1 [ (buf.validate.field).string.ip = true ];
+  string range_end   = 2 [ (buf.validate.field).string.ip = true ];
   string namespace   = 3;
 }
 

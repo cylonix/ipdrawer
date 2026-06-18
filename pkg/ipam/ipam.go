@@ -2,6 +2,7 @@ package ipam
 
 import (
 	"fmt"
+	"math/big"
 	"math/rand"
 	"net"
 	"time"
@@ -176,6 +177,25 @@ func (m *IPManager) temporaryReserveIP(namespace, uuid string, s, e, avail net.I
 	return avail, nil
 }
 
+// ipZScore returns the score used to order an IP within a pool's used-IP zset.
+// For IPv4 it is the absolute 32-bit value (unchanged, keeping existing data
+// valid). For IPv6 a full 128-bit value cannot fit in a float64, so the offset
+// from the pool start is used; it is monotonic within the pool and exact for
+// the bounded ranges this service supports.
+func ipZScore(start, ip net.IP) float64 {
+	if ip.To4() != nil {
+		return float64(nu.IP2Uint(ip))
+	}
+	offset := new(big.Int).Sub(nu.IPToBigInt(ip), nu.IPToBigInt(start))
+	f, _ := new(big.Float).SetInt(offset).Float64()
+	return f
+}
+
+// maxRandomEnumerate bounds the range size that the random allocator will
+// enumerate. It matches the IPv4 address space; larger (e.g. IPv6 /64) ranges
+// are rejected since enumerating them is infeasible (see "bounded ranges only").
+const maxRandomEnumerate = int64(1) << 32
+
 func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, excludeNet *net.IPNet, log *logrus.Entry) (net.IP, error) {
 	zkey := makePoolUsedIPZSet(namespace, s, e)
 	zset, err := m.redis.Client.ZRange(zkey, 0, -1).Result()
@@ -190,63 +210,91 @@ func (m *IPManager) checkUsedPoolRandom(namespace, uuid string, s, e net.IP, exc
 		usedIPs[ip] = true
 	}
 
-	// Calculate total range size
-	start := nu.IP2Uint(s)
-	end := nu.IP2Uint(e)
-	totalSize := end - start + 1
-
-	// Define segment size (e.g., 256 IPs per segment)
-	const segmentSize uint32 = 256
-	numSegments := (totalSize + segmentSize - 1) / segmentSize // Round up division
-
-	// Initialize random source
-	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	// Create random order of segments to try
-	segmentOrder := rnd.Perm(int(numSegments))
-
 	var usedByOtherUUID net.IP
 
-	// Try each segment in random order
-	for _, segmentIdx := range segmentOrder {
-		// Calculate segment boundaries
-		segmentStart := start + uint32(segmentIdx)*segmentSize
-		segmentEnd := segmentStart + segmentSize - 1
-		if segmentEnd > end {
-			segmentEnd = end
+	// tryIP checks a candidate address and reserves it when free. The returned
+	// done flag reports whether allocation finished (success or hard error).
+	tryIP := func(avail net.IP) (net.IP, bool, error) {
+		// Skip if IP is in used set
+		if usedIPs[avail.String()] {
+			return nil, false, nil
 		}
+		// Skip if IP falls within exclude prefix
+		if excludeNet != nil && excludeNet.Contains(avail) {
+			return nil, false, nil
+		}
+		logger := log.WithField("ip", avail.String())
+		if !m.checkTempReserved(namespace, uuid, avail, logger) {
+			return nil, false, nil
+		}
+		if m.hasIPBeenUsedByAnyUuid(namespace, avail, logger) {
+			usedByOtherUUID = avail
+			return nil, false, nil
+		}
+		// Found a free IP
+		ip, err := m.temporaryReserveIP(namespace, uuid, s, e, avail, logger)
+		return ip, true, err
+	}
 
-		// Create random order of IPs within this segment
-		segmentSize := segmentEnd - segmentStart + 1
-		ipOrder := rnd.Perm(int(segmentSize))
+	const segmentSize = 256
 
-		// Try each IP in the segment in random order
-		for _, offset := range ipOrder {
-			curr := segmentStart + uint32(offset)
-			avail := nu.Int2IP(curr)
-
-			// Skip if IP is in used set
-			if usedIPs[avail.String()] {
-				continue
+	if s.To4() != nil && e.To4() != nil {
+		// IPv4 fast path: arithmetic in uint32.
+		start := nu.IP2Uint(s)
+		end := nu.IP2Uint(e)
+		totalSize := end - start + 1
+		numSegments := (totalSize + segmentSize - 1) / segmentSize
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		for _, segmentIdx := range rnd.Perm(int(numSegments)) {
+			segmentStart := start + uint32(segmentIdx)*segmentSize
+			segmentEnd := segmentStart + segmentSize - 1
+			if segmentEnd > end {
+				segmentEnd = end
 			}
-
-			// Skip if IP falls within exclude prefix
-			if excludeNet != nil && excludeNet.Contains(avail) {
-				continue
+			segLen := segmentEnd - segmentStart + 1
+			for _, offset := range rnd.Perm(int(segLen)) {
+				avail := nu.Int2IP(segmentStart + uint32(offset))
+				ip, done, err := tryIP(avail)
+				if err != nil {
+					return nil, err
+				}
+				if done {
+					return ip, nil
+				}
 			}
-
-			logger := log.WithField("ip", avail.String())
-			if !m.checkTempReserved(namespace, uuid, avail, logger) {
-				continue
+		}
+	} else {
+		// General path (IPv6 / mixed): arithmetic in big.Int.
+		start := nu.IPToBigInt(s)
+		end := nu.IPToBigInt(e)
+		totalSize := new(big.Int).Add(new(big.Int).Sub(end, start), big.NewInt(1))
+		if totalSize.Sign() <= 0 {
+			return nil, errNoIPAvailable
+		}
+		if totalSize.Cmp(big.NewInt(maxRandomEnumerate)) > 0 {
+			return nil, fmt.Errorf("%w: range %s-%s too large for random allocation; use sequential or a smaller pool", errNoIPAvailable, s, e)
+		}
+		total := totalSize.Int64()
+		numSegments := (total + segmentSize - 1) / segmentSize
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		for _, segmentIdx := range rnd.Perm(int(numSegments)) {
+			segStartOff := int64(segmentIdx) * segmentSize
+			segLen := int64(segmentSize)
+			if segStartOff+segLen > total {
+				segLen = total - segStartOff
 			}
-
-			if m.hasIPBeenUsedByAnyUuid(namespace, avail, logger) {
-				usedByOtherUUID = avail
-				continue
+			segBase := new(big.Int).Add(start, big.NewInt(segStartOff))
+			for _, offset := range rnd.Perm(int(segLen)) {
+				curr := new(big.Int).Add(segBase, big.NewInt(int64(offset)))
+				avail := nu.BigIntToIP(curr, true)
+				ip, done, err := tryIP(avail)
+				if err != nil {
+					return nil, err
+				}
+				if done {
+					return ip, nil
+				}
 			}
-
-			// Found a free IP
-			return m.temporaryReserveIP(namespace, uuid, s, e, avail, logger)
 		}
 	}
 
@@ -400,16 +448,15 @@ func (m *IPManager) CreateIP(ctx context.Context, ps []*model.Pool, addr *model.
 	// Remove temporary reserved key in any way
 	pipe.Del(makeIPTempReserved(namespace, ip))
 	// Add IP to used IP zset
-	score := float64(nu.IP2Uint(ip))
-	z := redis.Z{
-		Score:  score,
-		Member: ip.String(),
-	}
 	for _, p := range ps {
 		if pm.PoolContains(p, ip) {
 			s := net.ParseIP(p.Start)
 			e := net.ParseIP(p.End)
 			log.WithField("pool-s", s).WithField("pool-e", e).Infoln("created ip")
+			z := redis.Z{
+				Score:  ipZScore(s, ip),
+				Member: ip.String(),
+			}
 			pipe.ZAdd(makePoolUsedIPZSet(namespace, s, e), z)
 		}
 	}
@@ -654,9 +701,8 @@ func (m *IPManager) CreatePool(ctx context.Context, namespace string, n *model.N
 			continue
 		}
 
-		score := float64(nu.IP2Uint(ip))
 		z := redis.Z{
-			Score:  score,
+			Score:  ipZScore(s, ip),
 			Member: ip.String(),
 		}
 		members = append(members, z)

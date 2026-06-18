@@ -27,6 +27,15 @@ var (
 	DrawIPActivationSuccessMsg = "activation success"
 )
 
+// maskBits returns the prefix bit-length for the address family of ip: 32 for
+// IPv4 and 128 for IPv6.
+func maskBits(ip net.IP) int {
+	if ip != nil && ip.To4() != nil {
+		return 32
+	}
+	return 128
+}
+
 // ListNetwork is an endpoints returning all networks
 func (api *APIServer) ListNetwork(
 	ctx context.Context,
@@ -97,7 +106,7 @@ func (api *APIServer) DrawIP(
 	}
 	if len(pools) <= 0 && (req.Name != "" || req.Ip != "") {
 		if req.Ip != "" {
-			mask := net.CIDRMask(int(req.Mask), 32)
+			mask := net.CIDRMask(int(req.Mask), maskBits(net.ParseIP(req.Ip)))
 			ip := &net.IPNet{
 				IP:   net.ParseIP(req.Ip).Mask(mask),
 				Mask: mask,
@@ -140,8 +149,8 @@ func (api *APIServer) DrawIP(
 	// If req.Ip is not a prefix, try to draw req.Ip
 	wantIP := ""
 	if req.Ip != "" {
-		mask := net.CIDRMask(int(req.Mask), 32)
 		ip := net.ParseIP(req.Ip)
+		mask := net.CIDRMask(int(req.Mask), maskBits(ip))
 		if ip != nil {
 			log.WithField("masked-ip", ip.Mask(mask).String()).
 				WithField("mask", mask.String()).
@@ -229,7 +238,7 @@ func (api *APIServer) DrawIPEstimatingNetwork(
 		return nil, status.Error(codes.Internal, "cannot find remote addr")
 	}
 
-	n, err := api.manager.GetNetworkIncludingIP(ctx, namespace, ip.To4())
+	n, err := api.manager.GetNetworkIncludingIP(ctx, namespace, ip)
 	if err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
@@ -425,9 +434,10 @@ func (api *APIServer) GetNetwork(
 	var n *model.Network
 	var err error
 	if req.Name == "" {
+		ip := net.ParseIP(req.Ip)
 		n, err = api.manager.GetNetworkByIP(ctx, namespace, &net.IPNet{
-			IP:   net.ParseIP(req.Ip),
-			Mask: net.CIDRMask(int(req.Mask), 32),
+			IP:   ip,
+			Mask: net.CIDRMask(int(req.Mask), maskBits(ip)),
 		})
 	} else {
 		n, err = api.manager.GetNetworkByName(ctx, namespace, req.Name)
@@ -462,12 +472,16 @@ func (api *APIServer) CreateNetwork(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	netmask := netutil.IPMaskToIP(net.CIDRMask(int(req.Mask), 32))
-	broadcast := netutil.BroadcastIP(ipnet)
+	netmask := netutil.IPMaskToIP(ipnet.Mask)
+	// IPv6 has no broadcast address; BroadcastIP returns nil for IPv6 networks.
+	broadcastStr := ""
+	if broadcast := netutil.BroadcastIP(ipnet); broadcast != nil {
+		broadcastStr = broadcast.String()
+	}
 
 	n := &model.Network{
 		Prefix:    ipnet.String(),
-		Broadcast: broadcast.String(),
+		Broadcast: broadcastStr,
 		Netmask:   netmask.String(),
 		Gateways:  req.DefaultGateways,
 		Tags:      req.Tags,
@@ -491,9 +505,10 @@ func (api *APIServer) DeleteNetwork(
 	}
 
 	namespace := req.Namespace
+	ip := net.ParseIP(req.Ip)
 	network, err := api.manager.GetNetworkByIP(ctx, namespace, &net.IPNet{
-		IP:   net.ParseIP(req.Ip),
-		Mask: net.CIDRMask(int(req.Mask), 32),
+		IP:   ip,
+		Mask: net.CIDRMask(int(req.Mask), maskBits(ip)),
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -532,9 +547,10 @@ func (api *APIServer) GetPoolsInNetwork(
 	}
 
 	namespace := req.Namespace
+	ip := net.ParseIP(req.Ip)
 	n, err := api.manager.GetNetworkByIP(ctx, namespace, &net.IPNet{
-		IP:   net.ParseIP(req.Ip),
-		Mask: net.CIDRMask(int(req.Mask), 32),
+		IP:   ip,
+		Mask: net.CIDRMask(int(req.Mask), maskBits(ip)),
 	})
 	if err != nil {
 		return nil, err
@@ -558,9 +574,10 @@ func (api *APIServer) CreatePool(
 	}
 
 	namespace := req.Namespace
+	reqIP := net.ParseIP(req.Ip)
 	ip := &net.IPNet{
-		IP:   net.ParseIP(req.Ip),
-		Mask: net.CIDRMask(int(req.Mask), 32),
+		IP:   reqIP,
+		Mask: net.CIDRMask(int(req.Mask), maskBits(reqIP)),
 	}
 
 	pool := &model.Pool{

@@ -20,8 +20,8 @@ message Pool {
     AVAILABLE = 1;
     RESERVED  = 2;
   }
-  string                    start            = 1 [ (buf.validate.field).string.ipv4 = true ];
-  string                    end              = 2 [ (buf.validate.field).string.ipv4 = true ];
+  string                    start            = 1 [ (buf.validate.field).string.ip = true ];
+  string                    end              = 2 [ (buf.validate.field).string.ip = true ];
   Status                    status           = 3;
   repeated Tag              tags             = 4;
   google.protobuf.Timestamp created_at       = 5 [ (gogoproto.stdtime) = true ];
@@ -36,7 +36,7 @@ message IPAddr {
     TEMPORARY_RESERVED = 2;
     RESERVED = 3;
   }
-  string                    ip               = 1 [ (buf.validate.field).string.ipv4 = true ];
+  string                    ip               = 1 [ (buf.validate.field).string.ip = true ];
   Status                    status           = 2;
   repeated Tag              tags             = 3;
   google.protobuf.Timestamp created_at       = 4 [ (gogoproto.stdtime) = true ];
@@ -51,14 +51,14 @@ message Network {
     AVAILABLE = 1;
     RESERVED = 2;
   }
-  // All gateways must be valid IP v4 addresses
+  // All gateways must be valid IP addresses (v4 or v6)
   option (buf.validate.message).cel = {
     id: "Network.gateway"
-    message: "all gateways must be valid IP v4 addresses"
-    // `m.isIp(4)` must be true for all `m` in `this.gateways`
-    expression: "this.gateways.all(m, m.isIp(4))"
+    message: "all gateways must be valid IP addresses"
+    // `m.isIp()` must be true for all `m` in `this.gateways`
+    expression: "this.gateways.all(m, m.isIp())"
   };
-  string                    prefix           = 1 [ (buf.validate.field).string.ipv4_prefix = true ];
+  string                    prefix           = 1 [ (buf.validate.field).string.ip_prefix = true ];
   repeated string           gateways         = 2;
   string                    broadcast        = 3 [ (buf.validate.field).string.(ipv4_or_null) = true ];
   string                    netmask          = 4 [ (buf.validate.field).string.(ipv4_or_null) = true ];

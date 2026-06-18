@@ -145,6 +145,8 @@ func addPoolToNetwork(r *storage.Redis, namespace string, network *model.Network
 	return err
 }
 
+// ParseMask32 parses a single-host address. It accepts a bare IP (v4 or v6) or
+// a full-length prefix: /32 for IPv4 and /128 for IPv6.
 func ParseMask32(s string) (net.IP, error) {
 	ip, ipnet, err := net.ParseCIDR(s)
 	if err != nil {
@@ -155,10 +157,10 @@ func ParseMask32(s string) (net.IP, error) {
 		return ip, nil
 	}
 	ones, bits := ipnet.Mask.Size()
-	if ones == 32 && bits == 32 {
+	if ones == bits {
 		return ip, nil
 	}
-	return nil, errors.New("Only accepts /32 mask")
+	return nil, errors.New("Only accepts a full-length mask (/32 for IPv4, /128 for IPv6)")
 }
 
 func existsNetwork(r *storage.Redis, network *model.Network) bool {

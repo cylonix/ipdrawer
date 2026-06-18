@@ -5,32 +5,38 @@ import "buf/validate/validate.proto";
 
 option go_package = "github.com/hatena/ipdrawer/gen/go/model";
 
+// ipv4_or_null accepts any valid IP address (v4 or v6) or an empty string. The
+// name is retained for backward compatibility; the rule is dual-stack.
 extend buf.validate.StringRules {
   optional bool ipv4_or_null = 100001 [
     (buf.validate.predefined).cel = {
-      id:         "string.ipv4_or_null"
-      message:    "must be valid IP v4 address or not set"
-      expression: "this.isIp(4) || this == \"\""
+      id:         "string.ip_or_null"
+      message:    "must be a valid IP address or not set"
+      expression: "this.isIp() || this == \"\""
     }
   ];
 }
 
+// ipv4_mask accepts any valid prefix length for either family (0-128). The name
+// is retained for backward compatibility.
 extend buf.validate.Int32Rules {
     optional bool ipv4_mask = 100001 [
     (buf.validate.predefined).cel = {
-      id:         "ipv4_mask"
-      message:    "mask must be between 0 and 32"
-      expression: "this >= 0 && this <= 32"
+      id:         "ip_mask"
+      message:    "mask must be between 0 and 128"
+      expression: "this >= 0 && this <= 128"
     }
   ];
 }
 
+// ipv4_prefix_or_null accepts any valid IP prefix (v4 or v6) or an empty string.
+// The name is retained for backward compatibility; the rule is dual-stack.
 extend buf.validate.StringRules {
   optional bool ipv4_prefix_or_null = 100002 [
     (buf.validate.predefined).cel = {
-      id:         "string.ipv4_prefix_or_null"
-      message:    "must be valid IPv4 prefix (e.g., 10.0.0.0/8) or not set"
-      expression: "this == \"\" || this.isIpPrefix(4)"
+      id:         "string.ip_prefix_or_null"
+      message:    "must be a valid IP prefix (e.g., 10.0.0.0/8 or 2001:db8::/32) or not set"
+      expression: "this == \"\" || this.isIpPrefix()"
     }
   ];
 }
